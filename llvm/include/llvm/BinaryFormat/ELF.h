@@ -1103,6 +1103,11 @@ enum {
 #include "ELFRelocs/Xtensa.def"
 };
 
+// ELF Relocation types for RX
+enum {
+#include "ELFRelocs/RX.def"
+};
+
 #undef ELF_RELOC
 
 // Section header.

@@ -3407,6 +3407,20 @@ def WasmSystemLibrary
            __stack_chk_fail, __stack_chk_guard)>;
 
 //===----------------------------------------------------------------------===//
+// RX Runtime Libcalls
+//===----------------------------------------------------------------------===//
+
+// libgcc for rx-elf provides the default soft-float and 64-bit helpers;
+// the i128 ones and __mulodi4/__muloti4 come from Rust's compiler_builtins.
+def isRX : RuntimeLibcallPredicate<"TT.getArch() == Triple::rx">;
+def RXSystemLibrary
+    : SystemRuntimeLibrary<isRX,
+      (add DefaultLibcallImpls32, Int128RTLibcalls,
+           CompilerRTOnlyInt64Libcalls, CompilerRTOnlyInt128Libcalls,
+           __powisf2, __powidf2,
+           DefaultStackProtector)>;
+
+//===----------------------------------------------------------------------===//
 // Legacy Default Runtime Libcalls
 //===----------------------------------------------------------------------===//
 
