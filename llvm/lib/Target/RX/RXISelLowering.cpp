@@ -114,6 +114,22 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
       setOperationAction(Op, MVT::f32, Expand);
   }
 
+  // double with the DFPU: it stays soft-float (in register pairs, as the ABI
+  // passes it), and fast-math operations and integer-to-double conversions
+  // are replaced before type legalization by DFPU sequences (see
+  // PerformDAGCombine). Like the FPU, the DFPU flushes or traps on denormals
+  // (DPSW.DDN), so only operations marked nnan and ninf in functions whose
+  // double denormal environment is preserve-sign use it (canUseFPU);
+  // integer-to-double conversions are exact. BR_CC is Custom only so that
+  // DAGCombiner forms it from brcond + setcc (keeping the fast-math flags);
+  // softening does not call the target.
+  if (STI.hasDFPU()) {
+    setTargetDAGCombine({ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV,
+                         ISD::FSQRT, ISD::SINT_TO_FP, ISD::UINT_TO_FP,
+                         ISD::SETCC, ISD::BR_CC, ISD::SELECT_CC});
+    setOperationAction(ISD::BR_CC, MVT::f64, Custom);
+  }
+
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
@@ -229,6 +245,106 @@ SDValue RXTargetLowering::lowerFPArith(SDValue Op, SelectionDAG &DAG) const {
       .first;
 }
 
+// The low and high words of a (soft-float) double.
+static std::pair<SDValue, SDValue> splitF64(SDValue V, const SDLoc &DL,
+                                            SelectionDAG &DAG) {
+  SDValue I = DAG.getBitcast(MVT::i64, V);
+  return {DAG.getNode(ISD::EXTRACT_ELEMENT, DL, MVT::i32, I,
+                      DAG.getIntPtrConstant(0, DL)),
+          DAG.getNode(ISD::EXTRACT_ELEMENT, DL, MVT::i32, I,
+                      DAG.getIntPtrConstant(1, DL))};
+}
+
+static SDValue joinF64(SDValue Pair, const SDLoc &DL, SelectionDAG &DAG) {
+  return DAG.getBitcast(MVT::f64,
+                        DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64,
+                                    Pair.getValue(0), Pair.getValue(1)));
+}
+
+// The DFPU treats denormals like the FPU (DPSW.DDN), so the same conditions
+// apply, with the denormal environment for double.
+static bool isDFPUOperand(SDValue V, SDNodeFlags Flags,
+                          const SelectionDAG &DAG) {
+  return V.getValueType() == MVT::f64 && canUseFPU(Flags, DAG, MVT::f64);
+}
+
+// double (+dfpu), before type legalization: DFPU sequences for fast-math
+// arithmetic and compares and for integer-to-double conversions, working on
+// the two words of each double. Everything else is left to the default
+// soft-float expansion.
+SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
+                                            DAGCombinerInfo &DCI) const {
+  if (!DCI.isBeforeLegalize())
+    return SDValue();
+  SelectionDAG &DAG = DCI.DAG;
+  SDLoc DL(N);
+  SDVTList Pair = DAG.getVTList(MVT::i32, MVT::i32);
+  switch (N->getOpcode()) {
+  case ISD::FADD:
+  case ISD::FSUB:
+  case ISD::FMUL:
+  case ISD::FDIV: {
+    if (!isDFPUOperand(SDValue(N, 0), N->getFlags(), DAG))
+      return SDValue();
+    unsigned Op = N->getOpcode() == ISD::FADD   ? 0
+                  : N->getOpcode() == ISD::FSUB ? 1
+                  : N->getOpcode() == ISD::FMUL ? 2
+                                                : 5;
+    auto [ALo, AHi] = splitF64(N->getOperand(0), DL, DAG);
+    auto [BLo, BHi] = splitF64(N->getOperand(1), DL, DAG);
+    return joinF64(DAG.getNode(RXISD::DARITH, DL, Pair,
+                               DAG.getTargetConstant(Op, DL, MVT::i32), ALo,
+                               AHi, BLo, BHi),
+                   DL, DAG);
+  }
+  case ISD::FSQRT: {
+    if (!isDFPUOperand(SDValue(N, 0), N->getFlags(), DAG))
+      return SDValue();
+    auto [Lo, Hi] = splitF64(N->getOperand(0), DL, DAG);
+    return joinF64(DAG.getNode(RXISD::DSQRT, DL, Pair, Lo, Hi), DL, DAG);
+  }
+  case ISD::SINT_TO_FP:
+  case ISD::UINT_TO_FP: {
+    SDValue Src = N->getOperand(0);
+    if (N->getValueType(0) != MVT::f64 || Src.getValueType() != MVT::i32)
+      return SDValue();
+    unsigned Opc =
+        N->getOpcode() == ISD::SINT_TO_FP ? RXISD::ITOD : RXISD::UTOD;
+    return joinF64(DAG.getNode(Opc, DL, Pair, Src), DL, DAG);
+  }
+  case ISD::SETCC:
+  case ISD::SELECT_CC: {
+    bool IsSetCC = N->getOpcode() == ISD::SETCC;
+    ISD::CondCode Cond =
+        cast<CondCodeSDNode>(N->getOperand(IsSetCC ? 2 : 4))->get();
+    if (!canLowerDFPUCompare(N->getOperand(0), Cond, N->getFlags(), DAG))
+      return SDValue();
+    RXCC::CondCode CC;
+    SDValue Glue = emitCMP(N->getOperand(0), N->getOperand(1), Cond,
+                           N->getFlags(), CC, DL, DAG);
+    SDValue Bool = DAG.getNode(RXISD::SETCC, DL, MVT::i32,
+                               DAG.getConstant(CC, DL, MVT::i32), Glue);
+    if (IsSetCC)
+      return DAG.getZExtOrTrunc(Bool, DL, N->getValueType(0));
+    return DAG.getSelect(DL, N->getValueType(0), Bool, N->getOperand(2),
+                         N->getOperand(3));
+  }
+  case ISD::BR_CC: {
+    ISD::CondCode Cond = cast<CondCodeSDNode>(N->getOperand(1))->get();
+    if (!canLowerDFPUCompare(N->getOperand(2), Cond, N->getFlags(), DAG))
+      return SDValue();
+    RXCC::CondCode CC;
+    SDValue Glue = emitCMP(N->getOperand(2), N->getOperand(3), Cond,
+                           N->getFlags(), CC, DL, DAG);
+    return DAG.getNode(RXISD::BR_CC, DL, MVT::Other, N->getOperand(0),
+                       N->getOperand(4), DAG.getConstant(CC, DL, MVT::i32),
+                       Glue);
+  }
+  default:
+    return SDValue();
+  }
+}
+
 // Emits "cmp RHS, LHS" (flags for LHS - RHS) and returns the glue; sets CC
 // to the RX condition that is true when "LHS cond RHS" holds. A float
 // compare is an FCMP for fast-math code (no NaNs, so the O flag is clear and
@@ -238,6 +354,37 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
                                   ISD::CondCode Cond, SDNodeFlags Flags,
                                   RXCC::CondCode &CC, const SDLoc &DL,
                                   SelectionDAG &DAG) const {
+  if (LHS.getValueType() == MVT::f64) {
+    // Fast-math double compare (callers check canLowerDFPUCompare):
+    // DCMPcm Y, X sets DCMR.RES = X cm Y, MVFDR copies it to PSW.Z.
+    assert(canLowerDFPUCompare(LHS, Cond, Flags, DAG) &&
+           "not a DFPU compare");
+    SDValue X = LHS, Y = RHS;
+    unsigned CM;
+    CC = RXCC::EQ;
+    switch (Cond) {
+    case ISD::SETEQ: case ISD::SETOEQ: case ISD::SETUEQ:
+      CM = 2; break;
+    case ISD::SETNE: case ISD::SETONE: case ISD::SETUNE:
+      CM = 2; CC = RXCC::NE; break;
+    case ISD::SETLT: case ISD::SETOLT: case ISD::SETULT:
+      CM = 4; break;
+    case ISD::SETLE: case ISD::SETOLE: case ISD::SETULE:
+      CM = 6; break;
+    case ISD::SETGT: case ISD::SETOGT: case ISD::SETUGT:
+      CM = 4; std::swap(X, Y); break;
+    case ISD::SETGE: case ISD::SETOGE: case ISD::SETUGE:
+      CM = 6; std::swap(X, Y); break;
+    default:
+      llvm_unreachable("unexpected double condition");
+    }
+    auto [XLo, XHi] = splitF64(X, DL, DAG);
+    auto [YLo, YHi] = splitF64(Y, DL, DAG);
+    return DAG.getNode(RXISD::DCMP, DL, MVT::Glue,
+                       DAG.getTargetConstant(CM, DL, MVT::i32), XLo, XHi, YLo,
+                       YHi);
+  }
+
   if (LHS.getValueType() == MVT::f32) {
     if (canUseFPU(Flags, DAG, MVT::f32) && Cond != ISD::SETO &&
         Cond != ISD::SETUO) {
@@ -291,6 +438,15 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
     llvm_unreachable("unexpected integer condition");
   }
   return DAG.getNode(RXISD::CMP, DL, MVT::Glue, LHS, RHS);
+}
+
+// A double compare (only seen with +dfpu) that the DFPU can do; the others
+// keep the default soft-float expansion.
+bool RXTargetLowering::canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
+                                           SDNodeFlags Flags,
+                                           const SelectionDAG &DAG) const {
+  return isDFPUOperand(LHS, Flags, DAG) && Cond != ISD::SETO &&
+         Cond != ISD::SETUO;
 }
 
 SDValue RXTargetLowering::lowerBR_CC(SDValue Op, SelectionDAG &DAG) const {

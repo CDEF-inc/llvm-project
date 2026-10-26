@@ -1928,3 +1928,69 @@ let Predicates = [HasFPU, HasRXv2] in {
 def : Pat<(fsqrt (f32 GPR:$a)), (FSQRT_rr GPR:$a)>;
 def : Pat<(f32 (uint_to_fp (i32 GPR:$a))), (UTOF_rr GPR:$a)>;
 }
+
+//===----------------------------------------------------------------------===//
+// Double precision with the DFPU (+dfpu)
+//
+// double stays soft-float in general register pairs (low word first, as the
+// GCC ABI passes it). RXISelLowering replaces fast-math operations and
+// integer-to-double conversions with the nodes below, taking and producing
+// the two halves; RXAsmPrinter expands each pseudo into DMOV.L transfers to
+// DR0 / DR1, the DFPU instruction and DMOV.L transfers back. No DR register
+// is live outside a pseudo.
+//===----------------------------------------------------------------------===//
+
+// (lo, hi) = a op b, with op the DFPU3 operation field (dadd 0, dsub 1,
+// dmul 2, ddiv 5).
+def SDT_RXDArith : SDTypeProfile<2, 5, [
+  SDTCisVT<0, i32>, SDTCisVT<1, i32>, SDTCisVT<2, i32>, SDTCisVT<3, i32>,
+  SDTCisVT<4, i32>, SDTCisVT<5, i32>, SDTCisVT<6, i32>]>;
+// (lo, hi) = op(a), for dsqrt.
+def SDT_RXDUnary : SDTypeProfile<2, 2, [
+  SDTCisVT<0, i32>, SDTCisVT<1, i32>, SDTCisVT<2, i32>, SDTCisVT<3, i32>]>;
+// (lo, hi) = (double) a.
+def SDT_RXIToD : SDTypeProfile<2, 1, [
+  SDTCisVT<0, i32>, SDTCisVT<1, i32>, SDTCisVT<2, i32>]>;
+// PSW.Z = x cm y, with cm the DCMPcm condition (eq 2, lt 4, le 6).
+def SDT_RXDCmp : SDTypeProfile<0, 5, [
+  SDTCisVT<0, i32>, SDTCisVT<1, i32>, SDTCisVT<2, i32>, SDTCisVT<3, i32>,
+  SDTCisVT<4, i32>]>;
+
+def RXdarith : SDNode<"RXISD::DARITH", SDT_RXDArith>;
+def RXdsqrt  : SDNode<"RXISD::DSQRT", SDT_RXDUnary>;
+def RXitod   : SDNode<"RXISD::ITOD", SDT_RXIToD>;
+def RXutod   : SDNode<"RXISD::UTOD", SDT_RXIToD>;
+def RXdcmp   : SDNode<"RXISD::DCMP", SDT_RXDCmp, [SDNPOutGlue]>;
+
+let Predicates = [HasDFPU], Uses = [DPSW], Defs = [DR0, DR1, DPSW] in {
+// dmov.l x4, d<op> dr1, dr0, dr0, dmov.l x2
+let Size = 28 in
+def DARITH_P : RXPseudo<(outs GPR:$lo, GPR:$hi),
+                        (ins i32imm:$op, GPR:$alo, GPR:$ahi, GPR:$blo,
+                             GPR:$bhi),
+                        [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                              (RXdarith timm:$op, (i32 GPR:$alo),
+                                        (i32 GPR:$ahi), (i32 GPR:$blo),
+                                        (i32 GPR:$bhi)))]>;
+// dmov.l x2, dsqrt dr0, dr0, dmov.l x2
+let Size = 20 in
+def DSQRT_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$alo, GPR:$ahi),
+                       [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                             (RXdsqrt (i32 GPR:$alo), (i32 GPR:$ahi)))]>;
+// itod / utod a, dr0, dmov.l x2
+let Size = 12 in {
+def ITOD_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a),
+                      [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                            (RXitod (i32 GPR:$a)))]>;
+def UTOD_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a),
+                      [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                            (RXutod (i32 GPR:$a)))]>;
+}
+// dmov.l x4, dcmp<cm> dr1, dr0, mvfdr
+let Size = 23, Defs = [DR0, DR1, DPSW, PSW] in
+def DCMP_P : RXPseudo<(outs),
+                      (ins i32imm:$cm, GPR:$xlo, GPR:$xhi, GPR:$ylo,
+                           GPR:$yhi),
+                      [(RXdcmp timm:$cm, (i32 GPR:$xlo), (i32 GPR:$xhi),
+                               (i32 GPR:$ylo), (i32 GPR:$yhi))]>;
+}
