@@ -14,6 +14,7 @@
 #ifndef LLVM_LIB_TARGET_RX_RXISELLOWERING_H
 #define LLVM_LIB_TARGET_RX_RXISELLOWERING_H
 
+#include "RX.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLowering.h"
 
@@ -33,6 +34,12 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
 
+  // A float constant is a mov.l of its bit pattern.
+  bool isFPImmLegal(const APFloat &Imm, EVT VT,
+                    bool ForCodeSize) const override {
+    return VT == MVT::f32;
+  }
+
   // Every atomicrmw becomes a compare-and-swap loop.
   AtomicExpansionKind
   shouldExpandAtomicRMWInIR(const AtomicRMWInst *RMW) const override {
@@ -51,6 +58,10 @@ private:
   SDValue lowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerFPArith(SDValue Op, SelectionDAG &DAG) const;
+  SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
+                  SDNodeFlags Flags, RXCC::CondCode &CC, const SDLoc &DL,
+                  SelectionDAG &DAG) const;
 
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
                                bool IsVarArg,

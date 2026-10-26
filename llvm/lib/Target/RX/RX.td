@@ -21,6 +21,13 @@ def FeatureRXv3
 def FeatureDFPU
     : SubtargetFeature<"dfpu", "HasDFPU", "true",
                        "Enable double-precision FPU (DR0-DR15)">;
+// The single-precision FPU (GCC -mfpu). Some RXv1 parts (RX100, RX200) do
+// not have it. It does not handle NaNs, infinities or (with FPSW.DN = 0)
+// denormals the IEEE way, so code generation uses it only for operations
+// marked nnan and ninf; the others stay soft-float.
+def FeatureFPU
+    : SubtargetFeature<"fpu", "HasFPU", "true",
+                       "Use the single-precision FPU for fast-math code">;
 // GCC -m64bit-doubles: double is 64 bits. Recorded in e_flags; GNU ld
 // refuses to mix objects that disagree.
 def Feature64BitDoubles
@@ -39,6 +46,9 @@ def HasRXv3 : Predicate<"Subtarget->hasRXv3()">,
               AssemblerPredicate<(all_of FeatureRXv3), "RXv3">;
 def HasDFPU : Predicate<"Subtarget->hasDFPU()">,
               AssemblerPredicate<(all_of FeatureDFPU), "DFPU">;
+// Code generation only: the assembler accepts FPU instructions for every
+// CPU, like GNU as.
+def HasFPU : Predicate<"Subtarget->hasFPU()">;
 
 //===----------------------------------------------------------------------===//
 // Registers, instruction descriptions
@@ -57,9 +67,9 @@ class Proc<string Name, list<SubtargetFeature> Features>
 
 def : Proc<"generic", []>;
 def : Proc<"rxv1", []>;
-def : Proc<"rxv2", [FeatureRXv2]>;
-def : Proc<"rxv3", [FeatureRXv3, FeatureDFPU]>;
-def : Proc<"rxv3e", [FeatureRXv3e, FeatureDFPU]>;
+def : Proc<"rxv2", [FeatureRXv2, FeatureFPU]>;
+def : Proc<"rxv3", [FeatureRXv3, FeatureFPU, FeatureDFPU]>;
+def : Proc<"rxv3e", [FeatureRXv3e, FeatureFPU, FeatureDFPU]>;
 
 def RXAsmParser : AsmParser;
 

@@ -30,7 +30,15 @@ public:
   RXDAGToDAGISel(RXTargetMachine &TM, CodeGenOptLevel OptLevel)
       : SelectionDAGISel(TM, OptLevel) {}
 
+  bool runOnMachineFunction(MachineFunction &MF) override {
+    Subtarget = &MF.getSubtarget<RXSubtarget>();
+    return SelectionDAGISel::runOnMachineFunction(MF);
+  }
+
 private:
+  // For the pattern predicates (HasFPU, HasRXv2, ...).
+  const RXSubtarget *Subtarget = nullptr;
+
 #include "RXGenDAGISel.inc"
 
   void Select(SDNode *N) override;

@@ -36,6 +36,7 @@ class RXSubtarget : public RXGenSubtargetInfo {
   bool HasRXv3 = false;
   bool HasRXv3e = false;
   bool HasDFPU = false;
+  bool HasFPU = false;
   bool Has64BitDoubles = false;
 
   RXInstrInfo InstrInfo;
@@ -58,6 +59,7 @@ public:
   bool hasRXv3() const { return HasRXv3; }
   bool hasRXv3e() const { return HasRXv3e; }
   bool hasDFPU() const { return HasDFPU; }
+  bool hasFPU() const { return HasFPU; }
   bool has64BitDoubles() const { return Has64BitDoubles; }
 
   const RXInstrInfo *getInstrInfo() const override { return &InstrInfo; }

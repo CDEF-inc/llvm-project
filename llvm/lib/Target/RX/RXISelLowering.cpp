@@ -31,6 +31,9 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
                                    const RXSubtarget &STI)
     : TargetLowering(TM, STI), STI(STI) {
   addRegisterClass(MVT::i32, &RX::GPRRegClass);
+  // float with +fpu: see below.
+  if (STI.hasFPU())
+    addRegisterClass(MVT::f32, &RX::GPRRegClass);
   computeRegisterProperties(STI.getRegisterInfo());
 
   setStackPointerRegisterToSaveRestore(RX::R0);
@@ -72,9 +75,43 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   for (unsigned Op : {ISD::ADDC, ISD::ADDE, ISD::SUBC, ISD::SUBE})
     setOperationAction(Op, MVT::i32, Legal);
 
-  // float and double have no register class: they are softened to integers
-  // and their operations become libgcc calls (__addsf3, __adddf3, ...), which
-  // matches the GCC -m64bit-doubles ABI (values in general registers).
+  // double has no register class: it is softened to integers and its
+  // operations become libgcc calls (__adddf3, ...), which matches the GCC
+  // -m64bit-doubles ABI (values in general registers). So is float without
+  // +fpu; with it, float lives in the general registers (where the FPU works
+  // on it, and where the ABI passes it anyway) and only fast-math operations
+  // use FPU instructions; see lowerFPArith and emitCMP.
+  if (STI.hasFPU()) {
+    for (unsigned Op : {ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV})
+      setOperationAction(Op, MVT::f32, Custom);
+    setOperationAction(ISD::FSQRT, MVT::f32,
+                       STI.hasRXv2() ? Custom : LibCall);
+    for (unsigned Op : {ISD::SETCC, ISD::BR_CC, ISD::SELECT_CC})
+      setOperationAction(Op, MVT::f32, Custom);
+    setOperationAction(ISD::SELECT, MVT::f32, Expand);
+    setOperationAction(ISD::ConstantFP, MVT::f32, Legal);
+
+    // itof / utof are exact for any input; ftoi would trap on a denormal
+    // (FPSW.DN = 0), so float to integer stays a libcall.
+    setOperationAction(ISD::UINT_TO_FP, MVT::i32,
+                       STI.hasRXv2() ? Legal : LibCall);
+    setOperationAction(ISD::FP_TO_SINT, MVT::i32, LibCall);
+    setOperationAction(ISD::FP_TO_UINT, MVT::i32, LibCall);
+
+    // Everything else is bit manipulation or a libcall.
+    for (unsigned Op :
+         {ISD::FNEG, ISD::FABS, ISD::FCOPYSIGN, ISD::FREM, ISD::FMA,
+          ISD::FMAD, ISD::FMINNUM, ISD::FMAXNUM, ISD::FMINIMUM,
+          ISD::FMAXIMUM, ISD::FMINIMUMNUM, ISD::FMAXIMUMNUM, ISD::FCEIL,
+          ISD::FFLOOR, ISD::FTRUNC, ISD::FRINT, ISD::FNEARBYINT,
+          ISD::FROUND, ISD::FROUNDEVEN, ISD::FPOW, ISD::FPOWI, ISD::FSIN,
+          ISD::FCOS, ISD::FTAN, ISD::FSINCOS, ISD::FEXP, ISD::FEXP2,
+          ISD::FEXP10, ISD::FLOG, ISD::FLOG2, ISD::FLOG10, ISD::FLDEXP,
+          ISD::FFREXP, ISD::FCANONICALIZE, ISD::IS_FPCLASS, ISD::LROUND,
+          ISD::LLROUND, ISD::LRINT, ISD::LLRINT, ISD::FP_TO_FP16,
+          ISD::FP_TO_BF16, ISD::FP16_TO_FP, ISD::BF16_TO_FP})
+      setOperationAction(Op, MVT::f32, Expand);
+  }
 
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
@@ -114,6 +151,12 @@ SDValue RXTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return lowerSETCC(Op, DAG);
   case ISD::SELECT_CC:
     return lowerSELECT_CC(Op, DAG);
+  case ISD::FADD:
+  case ISD::FSUB:
+  case ISD::FMUL:
+  case ISD::FDIV:
+  case ISD::FSQRT:
+    return lowerFPArith(Op, DAG);
   case ISD::ATOMIC_FENCE:
     // Single-core: only the compiler must not reorder across a fence.
     return DAG.getNode(ISD::MEMBARRIER, SDLoc(Op), MVT::Other,
@@ -149,11 +192,74 @@ SDValue RXTargetLowering::lowerBlockAddress(SDValue Op,
   return DAG.getNode(RXISD::Wrapper, SDLoc(Op), PtrVT, BA);
 }
 
+// The RX FPU gives IEEE results only for operands that are not NaN,
+// infinite or denormal; the code generator uses it for operations whose
+// operands and results may be assumed not to be NaN or infinite (denormals
+// are flushed when the program sets FPSW.DN).
+static bool canUseFPU(SDNodeFlags Flags) {
+  return Flags.hasNoNaNs() && Flags.hasNoInfs();
+}
+
+// float arithmetic: an FPU instruction for fast-math operations (the node is
+// legal as is), a libcall otherwise.
+SDValue RXTargetLowering::lowerFPArith(SDValue Op, SelectionDAG &DAG) const {
+  if (canUseFPU(Op->getFlags()))
+    return Op;
+  RTLIB::Libcall LC;
+  switch (Op.getOpcode()) {
+  case ISD::FADD: LC = RTLIB::ADD_F32; break;
+  case ISD::FSUB: LC = RTLIB::SUB_F32; break;
+  case ISD::FMUL: LC = RTLIB::MUL_F32; break;
+  case ISD::FDIV: LC = RTLIB::DIV_F32; break;
+  case ISD::FSQRT: LC = RTLIB::SQRT_F32; break;
+  default:
+    llvm_unreachable("unexpected float operation");
+  }
+  SmallVector<SDValue, 2> Ops(Op->ops());
+  return makeLibCall(DAG, LC, MVT::f32, Ops, MakeLibCallOptions(), SDLoc(Op))
+      .first;
+}
+
 // Emits "cmp RHS, LHS" (flags for LHS - RHS) and returns the glue; sets CC
-// to the RX condition that is true when "LHS cond RHS" holds.
-static SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
-                       RXCC::CondCode &CC, const SDLoc &DL,
-                       SelectionDAG &DAG) {
+// to the RX condition that is true when "LHS cond RHS" holds. A float
+// compare is an FCMP for fast-math code (no NaNs, so the O flag is clear and
+// the signed conditions apply), and a libcall followed by an integer compare
+// otherwise.
+SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
+                                  ISD::CondCode Cond, SDNodeFlags Flags,
+                                  RXCC::CondCode &CC, const SDLoc &DL,
+                                  SelectionDAG &DAG) const {
+  if (LHS.getValueType() == MVT::f32) {
+    if (canUseFPU(Flags) && Cond != ISD::SETO && Cond != ISD::SETUO) {
+      switch (Cond) {
+      case ISD::SETEQ: case ISD::SETOEQ: case ISD::SETUEQ:
+        CC = RXCC::EQ; break;
+      case ISD::SETNE: case ISD::SETONE: case ISD::SETUNE:
+        CC = RXCC::NE; break;
+      case ISD::SETLT: case ISD::SETOLT: case ISD::SETULT:
+        CC = RXCC::LT; break;
+      case ISD::SETLE: case ISD::SETOLE: case ISD::SETULE:
+        CC = RXCC::LE; break;
+      case ISD::SETGT: case ISD::SETOGT: case ISD::SETUGT:
+        CC = RXCC::GT; break;
+      case ISD::SETGE: case ISD::SETOGE: case ISD::SETUGE:
+        CC = RXCC::GE; break;
+      default:
+        llvm_unreachable("unexpected float condition");
+      }
+      return DAG.getNode(RXISD::FCMP, DL, MVT::Glue, LHS, RHS);
+    }
+    SDValue NewLHS = LHS, NewRHS = RHS;
+    softenSetCCOperands(DAG, MVT::f32, NewLHS, NewRHS, Cond, DL, LHS, RHS);
+    if (!NewRHS) {
+      // NewLHS is already the boolean result.
+      NewRHS = DAG.getConstant(0, DL, NewLHS.getValueType());
+      Cond = ISD::SETNE;
+    }
+    LHS = NewLHS;
+    RHS = NewRHS;
+  }
+
   // Keep a constant on the right so it folds into the compare.
   if (isa<ConstantSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
     std::swap(LHS, RHS);
@@ -182,8 +288,8 @@ SDValue RXTargetLowering::lowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   ISD::CondCode Cond = cast<CondCodeSDNode>(Op.getOperand(1))->get();
   SDLoc DL(Op);
   RXCC::CondCode CC;
-  SDValue Glue =
-      emitCMP(Op.getOperand(2), Op.getOperand(3), Cond, CC, DL, DAG);
+  SDValue Glue = emitCMP(Op.getOperand(2), Op.getOperand(3), Cond,
+                         Op->getFlags(), CC, DL, DAG);
   return DAG.getNode(RXISD::BR_CC, DL, MVT::Other, Chain, Op.getOperand(4),
                      DAG.getConstant(CC, DL, MVT::i32), Glue);
 }
@@ -192,8 +298,8 @@ SDValue RXTargetLowering::lowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   ISD::CondCode Cond = cast<CondCodeSDNode>(Op.getOperand(2))->get();
   SDLoc DL(Op);
   RXCC::CondCode CC;
-  SDValue Glue =
-      emitCMP(Op.getOperand(0), Op.getOperand(1), Cond, CC, DL, DAG);
+  SDValue Glue = emitCMP(Op.getOperand(0), Op.getOperand(1), Cond,
+                         Op->getFlags(), CC, DL, DAG);
   return DAG.getNode(RXISD::SETCC, DL, MVT::i32,
                      DAG.getConstant(CC, DL, MVT::i32), Glue);
 }
@@ -202,8 +308,8 @@ SDValue RXTargetLowering::lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
   ISD::CondCode Cond = cast<CondCodeSDNode>(Op.getOperand(4))->get();
   SDLoc DL(Op);
   RXCC::CondCode CC;
-  SDValue Glue =
-      emitCMP(Op.getOperand(0), Op.getOperand(1), Cond, CC, DL, DAG);
+  SDValue Glue = emitCMP(Op.getOperand(0), Op.getOperand(1), Cond,
+                         Op->getFlags(), CC, DL, DAG);
   return DAG.getNode(RXISD::SELECT_CC, DL, Op.getValueType(),
                      Op.getOperand(2), Op.getOperand(3),
                      DAG.getConstant(CC, DL, MVT::i32), Glue);
