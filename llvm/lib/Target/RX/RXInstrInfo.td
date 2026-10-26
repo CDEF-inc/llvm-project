@@ -1103,6 +1103,295 @@ foreach C = [CC_EQ, CC_NE, CC_GEU, CC_LTU, CC_GTU, CC_LEU, CC_PZ, CC_N,
     let Inst{3-0} = C.Value;
   }
 
+// stz / stnz: Rd = #imm (or Rs) if Z is set / clear.
+let Uses = [PSW] in {
+defm STZ  : AluFD70<0xe, "stz">;
+defm STNZ : AluFD70<0xf, "stnz">;
+let Predicates = [HasRXv2] in {
+def STZ_rr  : AluFC<0x4b, "stz">;
+def STNZ_rr : AluFC<0x4f, "stnz">;
+}
+}
+
+//===----------------------------------------------------------------------===//
+// Single-precision FPU
+//
+// The operands are IEEE single-precision values in general registers. Memory
+// operands are always 32-bit ("dsp[Rs]" or "dsp[Rs].L").
+//===----------------------------------------------------------------------===//
+
+// 1111 1100 op rs rd [dsp]: op = 0x80 + 4 * sub + sd, where sd is 00 = [Rs],
+// 01 = dsp8[Rs], 10 = dsp16[Rs], 11 = Rs.
+class FPUrr<int op, dag outs, dag ins, string asmstr>
+    : RXInst24<outs, ins, asmstr> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfc;
+  let Inst{15-8} = op;
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+class FPUm8<int op, dag outs, dag ins, string asmstr>
+    : RXInst32<outs, ins, asmstr> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> dsp;
+  let Inst{31-24} = 0xfc;
+  let Inst{23-16} = op;
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = dsp;
+}
+class FPUm16<int op, dag outs, dag ins, string asmstr>
+    : RXInst40<outs, ins, asmstr> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> dsp;
+  let Inst{39-32} = 0xfc;
+  let Inst{31-24} = op;
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = dsp{15-8};
+}
+
+// Register and memory source forms. `rdin` holds the inputs that come
+// before the source (the tied destination of a read-modify-write
+// operation, or the second operand of FCMP).
+multiclass FPUSrc<int sub, string mn, dag outs, dag rdin, string cons> {
+  defvar op = !add(0x80, !shl(sub, 2));
+  let Constraints = cons in {
+  def _rr : FPUrr<!add(op, 3), outs, !con(rdin, (ins GPR:$rs)),
+                  mn#"\t$rs, $rd">;
+  let mayLoad = 1 in {
+  def _m0 : FPUrr<op, outs, !con(rdin, (ins GPR:$rs)), mn#"\t[$rs], $rd">;
+  def _m8 : FPUm8<!add(op, 1), outs, !con(rdin, (ins GPR:$rs, dsp8l:$dsp)),
+                  mn#"\t$dsp[$rs], $rd">;
+  def _m16 : FPUm16<!add(op, 2), outs,
+                    !con(rdin, (ins GPR:$rs, dsp16l:$dsp)),
+                    mn#"\t$dsp[$rs], $rd">;
+  }
+  }
+}
+
+// op #imm32, Rd: 1111 1101 0111 0010 sub rd imm32
+class FPUri<int sub, string mn, dag outs, dag ins, string cons>
+    : RXInst56<outs, ins, mn#"\t$imm, $rd"> {
+  let Constraints = cons;
+  bits<4> rd;
+  bits<32> imm;
+  let Inst{55-48} = 0xfd;
+  let Inst{47-40} = 0x72;
+  let Inst{39-36} = sub;
+  let Inst{35-32} = rd;
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+
+// Rd = Rd op src
+multiclass FPUArith<int sub, string mn> {
+  defm "" : FPUSrc<sub, mn, (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+  def _ri : FPUri<sub, mn, (outs GPR:$rd), (ins GPR:$src, imm32:$imm),
+                  "$src = $rd">;
+}
+
+// Rd = op src
+multiclass FPUConv<int sub, string mn> {
+  defm "" : FPUSrc<sub, mn, (outs GPR:$rd), (ins), "">;
+}
+
+let Uses = [FPSW], Defs = [PSW, FPSW] in {
+defm FSUB : FPUArith<0, "fsub">;
+defm FADD : FPUArith<2, "fadd">;
+defm FMUL : FPUArith<3, "fmul">;
+defm FDIV : FPUArith<4, "fdiv">;
+
+// fcmp src, Rd: sets the flags for Rd - src.
+defm FCMP : FPUSrc<1, "fcmp", (outs), (ins GPR:$rd), "">;
+def FCMP_ri : FPUri<1, "fcmp", (outs), (ins GPR:$rd, imm32:$imm), "">;
+
+defm FTOI  : FPUConv<5, "ftoi">;
+defm ROUND : FPUConv<6, "round">;
+let Predicates = [HasRXv2] in {
+defm FSQRT : FPUConv<8, "fsqrt">;
+defm FTOU  : FPUConv<9, "ftou">;
+}
+
+// itof / utof Rs, Rd (integer to float). The memory forms take a memex size
+// and are not implemented.
+def ITOF_rr : FPUrr<0x47, (outs GPR:$rd), (ins GPR:$rs), "itof\t$rs, $rd">;
+let Predicates = [HasRXv2] in
+def UTOF_rr : FPUrr<0x57, (outs GPR:$rd), (ins GPR:$rs), "utof\t$rs, $rd">;
+
+// RXv2 3-operand forms: fsub computes rs2 - rs, like SUB.
+let Predicates = [HasRXv2] in {
+def FSUB_rrr : Alu3RR<0x8, "fsub">;
+def FADD_rrr : Alu3RR<0xa, "fadd">;
+def FMUL_rrr : Alu3RR<0xb, "fmul">;
+}
+} // Uses = [FPSW], Defs = [PSW, FPSW]
+
+//===----------------------------------------------------------------------===//
+// DSP: multiply and multiply-accumulate into an accumulator (A0 / A1)
+//
+// RXv1 has one accumulator and the operand is implicit; RXv2 names it.
+//===----------------------------------------------------------------------===//
+
+// op Rs, Rs2, An: 1111 1101 0g00 a op(3) rs rs2
+class DSPMulBase<bits<1> g, bits<3> op, dag outs, string asmstr>
+    : RXInst24<outs, (ins GPR:$rs, GPR:$rs2), asmstr> {
+  bits<1> acc;
+  bits<4> rs;
+  bits<4> rs2;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b0, g, 0b00, acc, op};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rs2;
+}
+class DSPMul<bits<1> g, bits<3> op, string mn>
+    : DSPMulBase<g, op, (outs ACC:$acc), mn#"\t$rs, $rs2, $acc">;
+class DSPMulV1<bits<3> op, string mn>
+    : DSPMulBase<0, op, (outs), mn#"\t$rs, $rs2"> {
+  let acc = 0;
+}
+
+// mvtac{hi,lo,gu} Rs, An: 1111 1101 0001 0111 a 0 op(2) rs
+class MvtacBase<bits<2> op, dag outs, string asmstr>
+    : RXInst24<outs, (ins GPR:$rs), asmstr> {
+  bits<1> acc;
+  bits<4> rs;
+  let Inst{23-8} = 0xfd17;
+  let Inst{7-4} = {acc, 0b0, op};
+  let Inst{3-0} = rs;
+}
+class Mvtac<bits<2> op, string mn>
+    : MvtacBase<op, (outs ACC:$acc), mn#"\t$rs, $acc">;
+class MvtacV1<bits<2> op, string mn>
+    : MvtacBase<op, (outs), mn#"\t$rs"> {
+  let acc = 0;
+}
+
+// mvfac{hi,lo,mi,gu} #imm, An, Rd: 1111 1101 0001 111i a m op(2) rd, where
+// the shift count #0, #1, #2 is encoded in (i, m) as (1, 0), (1, 1), (0, 0).
+def MvfacImmClass : RXImmClass<"MvfacImm">;
+def mvfacimm : Operand<i32> {
+  let ParserMatchClass = MvfacImmClass;
+  let EncoderMethod = "getMvfacImmOpValue";
+}
+class MvfacBase<bits<2> op, dag ins, string asmstr>
+    : RXInst24<(outs GPR:$rd), ins, asmstr> {
+  bits<2> imm;
+  bits<1> acc;
+  bits<4> rd;
+  let Inst{23-9} = 0b111111010001111;
+  let Inst{8} = imm{1};
+  let Inst{7} = acc;
+  let Inst{6} = imm{0};
+  let Inst{5-4} = op;
+  let Inst{3-0} = rd;
+}
+class Mvfac<bits<2> op, string mn>
+    : MvfacBase<op, (ins mvfacimm:$imm, ACC:$acc), mn#"\t$imm, $acc, $rd">;
+// RXv1 form: no shift, A0.
+class MvfacV1<bits<2> op, string mn>
+    : MvfacBase<op, (ins), mn#"\t$rd"> {
+  let imm = 0b10;
+  let acc = 0;
+}
+
+// rac{w,l} / rdac{w,l} #1|#2, An: 1111 1101 0001 100l a r 0 i 0000
+def RacImmClass : RXImmClass<"RacImm">;
+def racimm : Operand<i32> {
+  let ParserMatchClass = RacImmClass;
+  let EncoderMethod = "getRacImmOpValue";
+}
+class RacBase<bit l, bit r, dag ins, string asmstr>
+    : RXInst24<(outs), ins, asmstr> {
+  bits<1> imm;
+  bits<1> acc;
+  let Inst{23-9} = 0b111111010001100;
+  let Inst{8} = l;
+  let Inst{7} = acc;
+  let Inst{6} = r;
+  let Inst{5} = 0b0;
+  let Inst{4} = imm;
+  let Inst{3-0} = 0b0000;
+}
+class Rac<bit l, bit r, string mn>
+    : RacBase<l, r, (ins racimm:$imm, ACC:$acc), mn#"\t$imm, $acc">;
+class RacV1<bit l, bit r, string mn>
+    : RacBase<l, r, (ins racimm:$imm), mn#"\t$imm"> {
+  let acc = 0;
+}
+
+let hasSideEffects = 1 in {
+def MULHI_V1 : DSPMulV1<0b000, "mulhi">;
+def MULLO_V1 : DSPMulV1<0b001, "mullo">;
+def MACHI_V1 : DSPMulV1<0b100, "machi">;
+def MACLO_V1 : DSPMulV1<0b101, "maclo">;
+def MVTACHI_V1 : MvtacV1<0b00, "mvtachi">;
+def MVTACLO_V1 : MvtacV1<0b01, "mvtaclo">;
+def MVFACHI_V1 : MvfacV1<0b00, "mvfachi">;
+def MVFACLO_V1 : MvfacV1<0b01, "mvfaclo">;
+def MVFACMI_V1 : MvfacV1<0b10, "mvfacmi">;
+def RACW_V1 : RacV1<0, 0, "racw">;
+
+let Predicates = [HasRXv2] in {
+def MULHI : DSPMul<0, 0b000, "mulhi">;
+def MULLO : DSPMul<0, 0b001, "mullo">;
+def MULLH : DSPMul<0, 0b010, "mullh">;
+def EMULA : DSPMul<0, 0b011, "emula">;
+def MACHI : DSPMul<0, 0b100, "machi">;
+def MACLO : DSPMul<0, 0b101, "maclo">;
+def MACLH : DSPMul<0, 0b110, "maclh">;
+def EMACA : DSPMul<0, 0b111, "emaca">;
+def MSBHI : DSPMul<1, 0b100, "msbhi">;
+def MSBLO : DSPMul<1, 0b101, "msblo">;
+def MSBLH : DSPMul<1, 0b110, "msblh">;
+def EMSBA : DSPMul<1, 0b111, "emsba">;
+def MVTACHI : Mvtac<0b00, "mvtachi">;
+def MVTACLO : Mvtac<0b01, "mvtaclo">;
+def MVTACGU : Mvtac<0b11, "mvtacgu">;
+def MVFACHI : Mvfac<0b00, "mvfachi">;
+def MVFACLO : Mvfac<0b01, "mvfaclo">;
+def MVFACMI : Mvfac<0b10, "mvfacmi">;
+def MVFACGU : Mvfac<0b11, "mvfacgu">;
+def RACW  : Rac<0, 0, "racw">;
+def RDACW : Rac<0, 1, "rdacw">;
+def RACL  : Rac<1, 0, "racl">;
+def RDACL : Rac<1, 1, "rdacl">;
+}
+}
+
+//===----------------------------------------------------------------------===//
+// RXv2 exclusive access: movli / movco
+//===----------------------------------------------------------------------===//
+
+let Predicates = [HasRXv2], hasSideEffects = 1 in {
+// movli [Rs], Rd: load Rd and set the LI flag.
+let mayLoad = 1 in
+def MOVLI : RXInst24<(outs GPR:$rd), (ins GPR:$rs), "movli\t[$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-8} = 0xfd2f;
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+// movco Rs, [Rd]: store Rs if LI is set; Rs becomes 0 on success, 1 on
+// failure.
+let mayStore = 1, Constraints = "$rs = $res" in
+def MOVCO : RXInst24<(outs GPR:$res), (ins GPR:$rs, GPR:$rd),
+                     "movco\t$rs, [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-8} = 0xfd27;
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+}
+
 //===----------------------------------------------------------------------===//
 // Code generation
 //

@@ -53,6 +53,16 @@ class RXMCCodeEmitter : public MCCodeEmitter {
                            SmallVectorImpl<MCFixup> &Fixups,
                            const MCSubtargetInfo &STI) const;
 
+  // MVFAC* shift count #0, #1, #2 as the (i, m) bit pair 10, 11, 00.
+  unsigned getMvfacImmOpValue(const MCInst &MI, unsigned OpNo,
+                              SmallVectorImpl<MCFixup> &Fixups,
+                              const MCSubtargetInfo &STI) const;
+
+  // RACW / RACL / RDACW / RDACL #1 or #2, encoded as 0 or 1.
+  unsigned getRacImmOpValue(const MCInst &MI, unsigned OpNo,
+                            SmallVectorImpl<MCFixup> &Fixups,
+                            const MCSubtargetInfo &STI) const;
+
   unsigned getBrTargetOpValue(const MCInst &MI, unsigned OpNo,
                               SmallVectorImpl<MCFixup> &Fixups,
                               MCFixupKind Kind, unsigned Offset) const;
@@ -117,6 +127,25 @@ unsigned RXMCCodeEmitter::getImm32OpValue(const MCInst &MI, unsigned OpNo,
   unsigned Size = MCII.get(MI.getOpcode()).getSize();
   Fixups.push_back(MCFixup::create(Size - 4, MO.getExpr(), FK_Data_4));
   return 0;
+}
+
+unsigned RXMCCodeEmitter::getMvfacImmOpValue(const MCInst &MI, unsigned OpNo,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const {
+  static const unsigned Enc[] = {0b10, 0b11, 0b00};
+  const MCOperand &MO = MI.getOperand(OpNo);
+  assert(MO.isImm() && MO.getImm() >= 0 && MO.getImm() <= 2 &&
+         "MVFAC shift count must be 0, 1 or 2");
+  return Enc[MO.getImm()];
+}
+
+unsigned RXMCCodeEmitter::getRacImmOpValue(const MCInst &MI, unsigned OpNo,
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  assert(MO.isImm() && (MO.getImm() == 1 || MO.getImm() == 2) &&
+         "RAC shift count must be 1 or 2");
+  return static_cast<unsigned>(MO.getImm()) - 1;
 }
 
 unsigned RXMCCodeEmitter::getBrTargetOpValue(const MCInst &MI, unsigned OpNo,

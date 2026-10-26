@@ -175,6 +175,8 @@ public:
     int64_t V;
     return isHashImmInRange(0, 1020) && getConstant(V) && V % 4 == 0;
   }
+  bool isMvfacImm() const { return isHashImmInRange(0, 2); }
+  bool isRacImm() const { return isHashImmInRange(1, 2); }
 
   bool isDsp5B() const { return isDsp(31, 1); }
   bool isDsp5W() const { return isDsp(31, 2); }
@@ -238,6 +240,15 @@ static unsigned getZeroDspOpcode(unsigned Opc) {
   case RX::MOV_L_st8: return RX::MOV_L_st0;
   case RX::MOVU_B_ld8: return RX::MOVU_B_ld0;
   case RX::MOVU_W_ld8: return RX::MOVU_W_ld0;
+  case RX::FSUB_m8: return RX::FSUB_m0;
+  case RX::FCMP_m8: return RX::FCMP_m0;
+  case RX::FADD_m8: return RX::FADD_m0;
+  case RX::FMUL_m8: return RX::FMUL_m0;
+  case RX::FDIV_m8: return RX::FDIV_m0;
+  case RX::FTOI_m8: return RX::FTOI_m0;
+  case RX::ROUND_m8: return RX::ROUND_m0;
+  case RX::FSQRT_m8: return RX::FSQRT_m0;
+  case RX::FTOU_m8: return RX::FTOU_m0;
   default: return 0;
   }
 }
@@ -306,13 +317,24 @@ ParseStatus RXAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
   std::string Name = Tok.getIdentifier().lower();
   // SP is R0.
   Reg = Name == "sp" ? MCRegister(RX::R0) : MatchRegisterName(Name);
-  // General-purpose and control registers are written by name in operands.
+  // General-purpose, control and accumulator registers are written by name
+  // in operands.
   const MCRegisterInfo *MRI = getContext().getRegisterInfo();
   if (!Reg || !(MRI->getRegClass(RX::GPRRegClassID).contains(Reg) ||
-                MRI->getRegClass(RX::CTRLRegClassID).contains(Reg)))
+                MRI->getRegClass(RX::CTRLRegClassID).contains(Reg) ||
+                MRI->getRegClass(RX::ACCRegClassID).contains(Reg)))
     return ParseStatus::NoMatch;
   getParser().Lex();
   return ParseStatus::Success;
+}
+
+static bool takesLongMemoryOperand(StringRef Mnemonic) {
+  static const char *const Names[] = {"fsub", "fcmp",  "fadd",  "fmul", "fdiv",
+                                      "ftoi", "round", "fsqrt", "ftou"};
+  for (const char *N : Names)
+    if (Mnemonic.equals_insensitive(N))
+      return true;
+  return false;
 }
 
 // "[" Rn "]"
@@ -329,6 +351,13 @@ bool RXAsmParser::parseBracketedRegister(OperandVector &Operands) {
   if (parseToken(AsmToken::RBrac, "expected ']'"))
     return true;
   Operands.push_back(RXOperand::createToken("]", E));
+  // The FPU instructions only take 32-bit memory operands; GNU as accepts an
+  // optional ".L" after the bracket.
+  if (getLexer().is(AsmToken::Identifier) &&
+      getLexer().getTok().getIdentifier().equals_insensitive(".l") &&
+      takesLongMemoryOperand(
+          static_cast<RXOperand &>(*Operands[0]).getToken()))
+    getParser().Lex();
   return false;
 }
 
