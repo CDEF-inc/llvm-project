@@ -42,9 +42,19 @@ public:
   StringRef getPassName() const override { return "RX Assembly Printer"; }
 
   void emitInstruction(const MachineInstr *MI) override {
-    if (MI->getOpcode() == RX::CMPXCHG32) {
+    switch (MI->getOpcode()) {
+    case RX::CMPXCHG32:
       emitCmpXchg(*MI);
       return;
+    case RX::DARITH_P:
+    case RX::DSQRT_P:
+    case RX::ITOD_P:
+    case RX::UTOD_P:
+    case RX::DCMP_P:
+      emitDFPU(*MI);
+      return;
+    default:
+      break;
     }
     RXMCInstLower Lower(OutContext, *this);
     MCInst Inst;
@@ -89,7 +99,82 @@ public:
 
 private:
   void emitCmpXchg(const MachineInstr &MI);
+  void emitDFPU(const MachineInstr &MI);
 };
+
+// The DFPU pseudos (see RXInstrInfo.td) on soft-float doubles in register
+// pairs, with DR0 / DR1 as scratch. DMOV.L to DRLn / DRHn writes the low /
+// high word of DRn. For the three-operand operations and DCMPcm the second
+// operand is the left-hand side (DSUB src, src2, dest: dest = src2 - src).
+//
+//   DARITH_P lo, hi, op, alo, ahi, blo, bhi:
+//     dmov.l alo, drl0 / dmov.l ahi, drh0 / dmov.l blo, drl1 /
+//     dmov.l bhi, drh1 / d<op> dr1, dr0, dr0 / dmov.l drl0, lo /
+//     dmov.l drh0, hi
+//   DSQRT_P lo, hi, alo, ahi:  a -> dr0, dsqrt dr0, dr0, dr0 -> lo, hi
+//   ITOD_P / UTOD_P lo, hi, a: itod / utod a, dr0, dr0 -> lo, hi
+//   DCMP_P cm, xlo, xhi, ylo, yhi:
+//     x -> dr0, y -> dr1, dcmp<cm> dr1, dr0 (RES = x cm y), mvfdr (Z = RES)
+void RXAsmPrinter::emitDFPU(const MachineInstr &MI) {
+  auto Emit = [&](const MCInst &Inst) { EmitToStreamer(*OutStreamer, Inst); };
+  auto ToDR = [&](unsigned N, MCRegister Lo, MCRegister Hi) {
+    Emit(MCInstBuilder(RX::DMOV_L_rl).addReg(N ? RX::DRL1 : RX::DRL0)
+             .addReg(Lo));
+    Emit(MCInstBuilder(RX::DMOV_L_rh).addReg(N ? RX::DRH1 : RX::DRH0)
+             .addReg(Hi));
+  };
+  auto FromDR0 = [&](MCRegister Lo, MCRegister Hi) {
+    Emit(MCInstBuilder(RX::DMOV_L_lr).addReg(Lo).addReg(RX::DRL0));
+    Emit(MCInstBuilder(RX::DMOV_L_hr).addReg(Hi).addReg(RX::DRH0));
+  };
+  auto Reg = [&](unsigned I) { return MI.getOperand(I).getReg(); };
+
+  switch (MI.getOpcode()) {
+  case RX::DARITH_P: {
+    unsigned Opc;
+    switch (MI.getOperand(2).getImm()) {
+    case 0: Opc = RX::DADD; break;
+    case 1: Opc = RX::DSUB; break;
+    case 2: Opc = RX::DMUL; break;
+    case 5: Opc = RX::DDIV; break;
+    default: llvm_unreachable("unexpected DFPU operation");
+    }
+    ToDR(0, Reg(3), Reg(4));
+    ToDR(1, Reg(5), Reg(6));
+    Emit(MCInstBuilder(Opc).addReg(RX::DR0).addReg(RX::DR1).addReg(RX::DR0));
+    FromDR0(Reg(0), Reg(1));
+    return;
+  }
+  case RX::DSQRT_P:
+    ToDR(0, Reg(2), Reg(3));
+    Emit(MCInstBuilder(RX::DSQRT).addReg(RX::DR0).addReg(RX::DR0));
+    FromDR0(Reg(0), Reg(1));
+    return;
+  case RX::ITOD_P:
+  case RX::UTOD_P:
+    Emit(MCInstBuilder(MI.getOpcode() == RX::ITOD_P ? RX::ITOD : RX::UTOD)
+             .addReg(RX::DR0)
+             .addReg(Reg(2)));
+    FromDR0(Reg(0), Reg(1));
+    return;
+  case RX::DCMP_P: {
+    unsigned Opc;
+    switch (MI.getOperand(0).getImm()) {
+    case 2: Opc = RX::DCMPEQ; break;
+    case 4: Opc = RX::DCMPLT; break;
+    case 6: Opc = RX::DCMPLE; break;
+    default: llvm_unreachable("unexpected DCMP condition");
+    }
+    ToDR(0, Reg(1), Reg(2));
+    ToDR(1, Reg(3), Reg(4));
+    Emit(MCInstBuilder(Opc).addReg(RX::DR1).addReg(RX::DR0));
+    Emit(MCInstBuilder(RX::MVFDR));
+    return;
+  }
+  default:
+    llvm_unreachable("not a DFPU pseudo");
+  }
+}
 
 // CMPXCHG32 $dst, $tmp, $ptr, $cmp, $new. Both sequences are 16 bytes, the
 // Size of the pseudo; the instructions are emitted as is (not shrunk).

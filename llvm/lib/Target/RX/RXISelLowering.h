@@ -29,6 +29,7 @@ public:
   explicit RXTargetLowering(const TargetMachine &TM, const RXSubtarget &STI);
 
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+  SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
 
   MachineBasicBlock *
   EmitInstrWithCustomInserter(MachineInstr &MI,
@@ -59,6 +60,8 @@ private:
   SDValue lowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFPArith(SDValue Op, SelectionDAG &DAG) const;
+  bool canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
+                           SDNodeFlags Flags) const;
   SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
                   SDNodeFlags Flags, RXCC::CondCode &CC, const SDLoc &DL,
                   SelectionDAG &DAG) const;

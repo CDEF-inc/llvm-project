@@ -44,6 +44,8 @@ BitVector RXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(RX::R0); // SP
   for (MCPhysReg Reg : RX::CTRLRegClass)
     Reserved.set(Reg);
+  for (MCPhysReg Reg : RX::DCRRegClass) // DPSW, ...
+    Reserved.set(Reg);
   Reserved.set(RX::ACC0);
   Reserved.set(RX::ACC1);
   return Reserved;
