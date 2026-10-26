@@ -59,8 +59,8 @@ def DECNT : RXReg<2, "decnt">;
 def DEPC  : RXReg<3, "depc">;
 
 // Allocation order: caller-saved registers first, then callee-saved; R0 (SP)
-// is reserved.
-def GPR : RegisterClass<"RX", [i32], 32,
+// is reserved. The FPU works on single-precision values in these registers.
+def GPR : RegisterClass<"RX", [i32, f32], 32,
                         (add R1, R2, R3, R4, R5, R14, R15,
                              R6, R7, R8, R9, R10, R11, R12, R13, R0)>;
 

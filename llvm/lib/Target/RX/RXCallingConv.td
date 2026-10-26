@@ -20,7 +20,8 @@
 
 def RetCC_RX : CallingConv<[
   CCIfType<[i1, i8, i16], CCPromoteToType<i32>>,
-  CCIfType<[i32], CCAssignToReg<[R1, R2, R3, R4]>>
+  // float (a legal type with +fpu) is returned like an int.
+  CCIfType<[i32, f32], CCAssignToReg<[R1, R2, R3, R4]>>
 ]>;
 
 def CSR_RX : CalleeSavedRegs<(add R6, R7, R8, R9, R10, R11, R12, R13)>;

@@ -1703,6 +1703,7 @@ def RXcallseq_end   : SDNode<"ISD::CALLSEQ_END", SDT_RXCallSeqEnd,
                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def RXWrapper  : SDNode<"RXISD::Wrapper", SDT_RXWrapper>;
 def RXcmp      : SDNode<"RXISD::CMP", SDT_RXCmp, [SDNPOutGlue]>;
+def RXfcmp     : SDNode<"RXISD::FCMP", SDT_RXCmp, [SDNPOutGlue]>;
 def RXbrcc     : SDNode<"RXISD::BR_CC", SDT_RXBrCC, [SDNPHasChain, SDNPInGlue]>;
 def RXselectcc : SDNode<"RXISD::SELECT_CC", SDT_RXSelectCC, [SDNPInGlue]>;
 def RXsetcc    : SDNode<"RXISD::SETCC", SDT_RXSetCC, [SDNPInGlue]>;
@@ -1734,7 +1735,9 @@ def FRMIDX : RXPseudo<(outs GPR:$rd), (ins i32imm:$fi, i32imm:$off)>;
 
 let usesCustomInserter = 1, Uses = [PSW] in
 def SELECT : RXPseudo<(outs GPR:$rd), (ins GPR:$t, GPR:$f, i32imm:$cc),
-                      [(set GPR:$rd, (RXselectcc GPR:$t, GPR:$f, imm:$cc))]>;
+                      [(set (i32 GPR:$rd),
+                            (RXselectcc (i32 GPR:$t), (i32 GPR:$f),
+                                        imm:$cc))]>;
 
 // Conditional branch on a condition code; lowered to b<cond>.b. Branch
 // relaxation inverts it around a bra.a when the target is out of range.
@@ -1796,11 +1799,11 @@ def LD_UW : RXPseudo<(outs GPR:$rd), (ins mem:$a),
 }
 let mayStore = 1 in {
 def ST_L : RXPseudo<(outs), (ins GPR:$v, mem:$a),
-                    [(store GPR:$v, AddrL:$a)]>;
+                    [(store (i32 GPR:$v), AddrL:$a)]>;
 def ST_B : RXPseudo<(outs), (ins GPR:$v, mem:$a),
-                    [(truncstorei8 GPR:$v, AddrB:$a)]>;
+                    [(truncstorei8 (i32 GPR:$v), AddrB:$a)]>;
 def ST_W : RXPseudo<(outs), (ins GPR:$v, mem:$a),
-                    [(truncstorei16 GPR:$v, AddrW:$a)]>;
+                    [(truncstorei16 (i32 GPR:$v), AddrW:$a)]>;
 }
 }
 def : Pat<(i32 (extloadi8 AddrB:$a)), (LD_UB AddrB:$a)>;
@@ -1816,9 +1819,9 @@ def : Pat<(i32 (atomic_load_sext_8 AddrB:$a)), (LD_B AddrB:$a)>;
 def : Pat<(i32 (atomic_load_zext_16 AddrW:$a)), (LD_UW AddrW:$a)>;
 def : Pat<(i32 (atomic_load_aext_16 AddrW:$a)), (LD_UW AddrW:$a)>;
 def : Pat<(i32 (atomic_load_sext_16 AddrW:$a)), (LD_W AddrW:$a)>;
-def : Pat<(atomic_store_32 GPR:$v, AddrL:$a), (ST_L GPR:$v, AddrL:$a)>;
-def : Pat<(atomic_store_16 GPR:$v, AddrW:$a), (ST_W GPR:$v, AddrW:$a)>;
-def : Pat<(atomic_store_8 GPR:$v, AddrB:$a), (ST_B GPR:$v, AddrB:$a)>;
+def : Pat<(atomic_store_32 (i32 GPR:$v), AddrL:$a), (ST_L GPR:$v, AddrL:$a)>;
+def : Pat<(atomic_store_16 (i32 GPR:$v), AddrW:$a), (ST_W GPR:$v, AddrW:$a)>;
+def : Pat<(atomic_store_8 (i32 GPR:$v), AddrB:$a), (ST_B GPR:$v, AddrB:$a)>;
 
 // 32-bit compare-and-swap: $dst = [$ptr]; if $dst == $cmp, [$ptr] = $new.
 // RXAsmPrinter expands it after register allocation (so that nothing is
@@ -1887,5 +1890,41 @@ def : Pat<(subc GPR:$a, GPR:$b), (SUB_rrr GPR:$b, GPR:$a)>;
 def : Pat<(sube GPR:$a, GPR:$b), (SBB_rr GPR:$a, GPR:$b)>;
 
 // Comparisons: cmp src, src2 sets the flags for src2 - src.
-def : Pat<(RXcmp GPR:$a, GPR:$b), (CMP_rr GPR:$a, GPR:$b)>;
-def : Pat<(RXcmp GPR:$a, imm:$i), (CMP_ri32 GPR:$a, imm:$i)>;
+def : Pat<(RXcmp (i32 GPR:$a), (i32 GPR:$b)), (CMP_rr GPR:$a, GPR:$b)>;
+def : Pat<(RXcmp (i32 GPR:$a), imm:$i), (CMP_ri32 GPR:$a, imm:$i)>;
+
+//===----------------------------------------------------------------------===//
+// Single-precision float (+fpu)
+//
+// float values live in the general registers. Loads, stores, constants and
+// bitcasts are integer moves; the FPU instructions are selected only for the
+// fast-math operations that RXISelLowering leaves in the DAG (the others
+// become libcalls before instruction selection).
+//===----------------------------------------------------------------------===//
+
+def fpimm_bits : SDNodeXForm<fpimm, [{
+  return CurDAG->getTargetConstant(
+      N->getValueAPF().bitcastToAPInt().getZExtValue(), SDLoc(N), MVT::i32);
+}]>;
+
+def : Pat<(f32 fpimm:$i), (MOV_L_ri32 (fpimm_bits fpimm:$i))>;
+def : Pat<(f32 (bitconvert (i32 GPR:$a))), (COPY_TO_REGCLASS GPR:$a, GPR)>;
+def : Pat<(i32 (bitconvert (f32 GPR:$a))), (COPY_TO_REGCLASS GPR:$a, GPR)>;
+def : Pat<(f32 (load AddrL:$a)), (LD_L AddrL:$a)>;
+def : Pat<(store (f32 GPR:$v), AddrL:$a), (ST_L GPR:$v, AddrL:$a)>;
+def : Pat<(f32 (RXselectcc (f32 GPR:$t), (f32 GPR:$f), imm:$cc)),
+          (SELECT GPR:$t, GPR:$f, imm:$cc)>;
+
+let Predicates = [HasFPU] in {
+def : Pat<(fadd (f32 GPR:$a), (f32 GPR:$b)), (FADD_rr GPR:$a, GPR:$b)>;
+def : Pat<(fsub (f32 GPR:$a), (f32 GPR:$b)), (FSUB_rr GPR:$a, GPR:$b)>;
+def : Pat<(fmul (f32 GPR:$a), (f32 GPR:$b)), (FMUL_rr GPR:$a, GPR:$b)>;
+def : Pat<(fdiv (f32 GPR:$a), (f32 GPR:$b)), (FDIV_rr GPR:$a, GPR:$b)>;
+// fcmp src, src2 sets the flags for src2 - src, like cmp.
+def : Pat<(RXfcmp (f32 GPR:$a), (f32 GPR:$b)), (FCMP_rr GPR:$a, GPR:$b)>;
+def : Pat<(f32 (sint_to_fp (i32 GPR:$a))), (ITOF_rr GPR:$a)>;
+}
+let Predicates = [HasFPU, HasRXv2] in {
+def : Pat<(fsqrt (f32 GPR:$a)), (FSQRT_rr GPR:$a)>;
+def : Pat<(f32 (uint_to_fp (i32 GPR:$a))), (UTOF_rr GPR:$a)>;
+}
