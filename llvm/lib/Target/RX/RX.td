@@ -22,9 +22,11 @@ def FeatureDFPU
     : SubtargetFeature<"dfpu", "HasDFPU", "true",
                        "Enable double-precision FPU (DR0-DR15)">;
 // The single-precision FPU (GCC -mfpu). Some RXv1 parts (RX100, RX200) do
-// not have it. It does not handle NaNs, infinities or (with FPSW.DN = 0)
-// denormals the IEEE way, so code generation uses it only for operations
-// marked nnan and ninf; the others stay soft-float.
+// not have it. It does not handle NaNs, infinities or denormals the IEEE
+// way, so code generation uses it only for operations marked nnan and ninf
+// in functions that allow denormals to be flushed
+// (denormal_fpenv(preservesign)), and for integer-to-float conversions; the
+// others stay soft-float.
 def FeatureFPU
     : SubtargetFeature<"fpu", "HasFPU", "true",
                        "Use the single-precision FPU for fast-math code">;

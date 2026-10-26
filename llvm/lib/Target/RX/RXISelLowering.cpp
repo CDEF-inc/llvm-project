@@ -80,7 +80,8 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   // -m64bit-doubles ABI (values in general registers). So is float without
   // +fpu; with it, float lives in the general registers (where the FPU works
   // on it, and where the ABI passes it anyway) and only fast-math operations
-  // use FPU instructions; see lowerFPArith and emitCMP.
+  // in functions that allow flushing denormals use FPU instructions; see
+  // canUseFPU, lowerFPArith and emitCMP.
   if (STI.hasFPU()) {
     for (unsigned Op : {ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV})
       setOperationAction(Op, MVT::f32, Custom);
@@ -193,17 +194,25 @@ SDValue RXTargetLowering::lowerBlockAddress(SDValue Op,
 }
 
 // The RX FPU gives IEEE results only for operands that are not NaN,
-// infinite or denormal; the code generator uses it for operations whose
-// operands and results may be assumed not to be NaN or infinite (denormals
-// are flushed when the program sets FPSW.DN).
-static bool canUseFPU(SDNodeFlags Flags) {
-  return Flags.hasNoNaNs() && Flags.hasNoInfs();
+// infinite or denormal: denormal operands and results raise an
+// unimplemented-processing exception with FPSW.DN = 0 and are flushed to a
+// zero of the same sign with DN = 1 (the reset value, which rx-rt also
+// sets). The code generator therefore uses it only for operations that may
+// be assumed not to involve NaNs or infinities (nnan and ninf) in functions
+// whose denormal environment for the type allows flushing with the sign kept
+// (denormal_fpenv(preservesign), e.g. -fdenormal-fp-math=preserve-sign);
+// with the default IEEE environment everything stays soft-float.
+static bool canUseFPU(SDNodeFlags Flags, const SelectionDAG &DAG, EVT VT) {
+  if (!Flags.hasNoNaNs() || !Flags.hasNoInfs())
+    return false;
+  return DAG.getMachineFunction().getDenormalMode(VT.getFltSemantics()) ==
+         DenormalMode::getPreserveSign();
 }
 
 // float arithmetic: an FPU instruction for fast-math operations (the node is
 // legal as is), a libcall otherwise.
 SDValue RXTargetLowering::lowerFPArith(SDValue Op, SelectionDAG &DAG) const {
-  if (canUseFPU(Op->getFlags()))
+  if (canUseFPU(Op->getFlags(), DAG, Op.getValueType()))
     return Op;
   RTLIB::Libcall LC;
   switch (Op.getOpcode()) {
@@ -230,7 +239,8 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
                                   RXCC::CondCode &CC, const SDLoc &DL,
                                   SelectionDAG &DAG) const {
   if (LHS.getValueType() == MVT::f32) {
-    if (canUseFPU(Flags) && Cond != ISD::SETO && Cond != ISD::SETUO) {
+    if (canUseFPU(Flags, DAG, MVT::f32) && Cond != ISD::SETO &&
+        Cond != ISD::SETUO) {
       switch (Cond) {
       case ISD::SETEQ: case ISD::SETOEQ: case ISD::SETUEQ:
         CC = RXCC::EQ; break;
