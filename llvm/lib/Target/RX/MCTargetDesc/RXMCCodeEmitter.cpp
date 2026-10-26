@@ -63,6 +63,18 @@ class RXMCCodeEmitter : public MCCodeEmitter {
                             SmallVectorImpl<MCFixup> &Fixups,
                             const MCSubtargetInfo &STI) const;
 
+  // The last register of a DPUSHM/DPOPM range, as the distance from the
+  // first one (the previous operand).
+  unsigned getRegRangeOpValue(const MCInst &MI, unsigned OpNo,
+                              SmallVectorImpl<MCFixup> &Fixups,
+                              const MCSubtargetInfo &STI) const;
+
+  // BFMOV/BFMOVZ: the 16-bit field built from #slsb, #dlsb (the two previous
+  // operands) and #width.
+  unsigned getBfieldOpValue(const MCInst &MI, unsigned OpNo,
+                            SmallVectorImpl<MCFixup> &Fixups,
+                            const MCSubtargetInfo &STI) const;
+
   unsigned getBrTargetOpValue(const MCInst &MI, unsigned OpNo,
                               SmallVectorImpl<MCFixup> &Fixups,
                               MCFixupKind Kind, unsigned Offset) const;
@@ -146,6 +158,25 @@ unsigned RXMCCodeEmitter::getRacImmOpValue(const MCInst &MI, unsigned OpNo,
   assert(MO.isImm() && (MO.getImm() == 1 || MO.getImm() == 2) &&
          "RAC shift count must be 1 or 2");
   return static_cast<unsigned>(MO.getImm()) - 1;
+}
+
+unsigned RXMCCodeEmitter::getRegRangeOpValue(const MCInst &MI, unsigned OpNo,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const {
+  const MCRegisterInfo *MRI = Ctx.getRegisterInfo();
+  unsigned Lo = MRI->getEncodingValue(MI.getOperand(OpNo - 1).getReg());
+  unsigned Hi = MRI->getEncodingValue(MI.getOperand(OpNo).getReg());
+  assert(Hi >= Lo && "register range must be ascending");
+  return Hi - Lo;
+}
+
+unsigned RXMCCodeEmitter::getBfieldOpValue(const MCInst &MI, unsigned OpNo,
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
+  unsigned SLsb = MI.getOperand(OpNo - 2).getImm();
+  unsigned DLsb = MI.getOperand(OpNo - 1).getImm();
+  unsigned Width = MI.getOperand(OpNo).getImm();
+  return ((DLsb + Width) & 0x1f) << 10 | DLsb << 5 | ((DLsb - SLsb) & 0x1f);
 }
 
 unsigned RXMCCodeEmitter::getBrTargetOpValue(const MCInst &MI, unsigned OpNo,

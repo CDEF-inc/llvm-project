@@ -177,6 +177,8 @@ public:
   }
   bool isMvfacImm() const { return isHashImmInRange(0, 2); }
   bool isRacImm() const { return isHashImmInRange(1, 2); }
+  bool isBfLsb() const { return isHashImmInRange(0, 31); }
+  bool isBfWidth() const { return isHashImmInRange(1, 31); }
 
   bool isDsp5B() const { return isDsp(31, 1); }
   bool isDsp5W() const { return isDsp(31, 2); }
@@ -187,6 +189,8 @@ public:
   bool isDsp16B() const { return isDsp(65535, 1); }
   bool isDsp16W() const { return isDsp(65535, 2); }
   bool isDsp16L() const { return isDsp(65535, 4); }
+  bool isDsp8D() const { return isDsp(255, 8); }
+  bool isDsp16D() const { return isDsp(65535, 8); }
 
   bool isBrTarget() const { return Kind == k_Imm && !HasHash; }
 
@@ -249,6 +253,8 @@ static unsigned getZeroDspOpcode(unsigned Opc) {
   case RX::ROUND_m8: return RX::ROUND_m0;
   case RX::FSQRT_m8: return RX::FSQRT_m0;
   case RX::FTOU_m8: return RX::FTOU_m0;
+  case RX::DMOV_D_st8: return RX::DMOV_D_st0;
+  case RX::DMOV_D_ld8: return RX::DMOV_D_ld0;
   default: return 0;
   }
 }
@@ -262,6 +268,20 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MissingFeatures,
                                MatchingInlineAsm)) {
   case Match_Success:
+    switch (Inst.getOpcode()) {
+    case RX::DPUSHM_D:
+    case RX::DPUSHM_L:
+    case RX::DPOPM_D:
+    case RX::DPOPM_L: {
+      const MCRegisterInfo *MRI = getContext().getRegisterInfo();
+      if (MRI->getEncodingValue(Inst.getOperand(1).getReg()) <
+          MRI->getEncodingValue(Inst.getOperand(0).getReg()))
+        return Error(IDLoc, "register range must be ascending");
+      break;
+    }
+    default:
+      break;
+    }
     if (unsigned Opc = getZeroDspOpcode(Inst.getOpcode())) {
       const MCOperand &Dsp = Inst.getOperand(Inst.getNumOperands() - 1);
       if (Dsp.isImm() && Dsp.getImm() == 0) {
@@ -315,14 +335,25 @@ ParseStatus RXAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
   if (Tok.isNot(AsmToken::Identifier))
     return ParseStatus::NoMatch;
   std::string Name = Tok.getIdentifier().lower();
-  // SP is R0.
-  Reg = Name == "sp" ? MCRegister(RX::R0) : MatchRegisterName(Name);
-  // General-purpose, control and accumulator registers are written by name
-  // in operands.
+  // SP is R0; DCR0-DCR3 are the DFPU control registers.
+  static const MCPhysReg DCRs[] = {RX::DPSW, RX::DCMR, RX::DECNT, RX::DEPC};
+  if (Name == "sp")
+    Reg = RX::R0;
+  else if (Name.size() == 4 && StringRef(Name).starts_with("dcr") &&
+           Name[3] >= '0' && Name[3] <= '3')
+    Reg = DCRs[Name[3] - '0'];
+  else
+    Reg = MatchRegisterName(Name);
+  // General-purpose, control, accumulator and DFPU registers are written by
+  // name in operands.
+  static const unsigned Classes[] = {
+      RX::GPRRegClassID, RX::CTRLRegClassID, RX::ACCRegClassID,
+      RX::DPRRegClassID, RX::DRHRegClassID,  RX::DRLRegClassID,
+      RX::DCRRegClassID};
   const MCRegisterInfo *MRI = getContext().getRegisterInfo();
-  if (!Reg || !(MRI->getRegClass(RX::GPRRegClassID).contains(Reg) ||
-                MRI->getRegClass(RX::CTRLRegClassID).contains(Reg) ||
-                MRI->getRegClass(RX::ACCRegClassID).contains(Reg)))
+  if (!Reg || llvm::none_of(Classes, [&](unsigned RC) {
+        return MRI->getRegClass(RC).contains(Reg);
+      }))
     return ParseStatus::NoMatch;
   getParser().Lex();
   return ParseStatus::Success;

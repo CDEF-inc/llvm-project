@@ -44,6 +44,20 @@ def ACC1 : RXReg<1, "a1">;
 foreach I = 0-15 in
   def DR#I : RXReg<I, "dr"#I>, DwarfRegNum<[!add(32, I)]>;
 
+// The upper and lower 32-bit halves of DRn, as written in DMOV.L operands
+// (assembler only).
+foreach I = 0-15 in {
+  def DRH#I : RXReg<I, "drh"#I>;
+  def DRL#I : RXReg<I, "drl"#I>;
+}
+
+// DFPU control registers (MVTDC/MVFDC/DPUSHM.L/DPOPM.L); also written
+// dcr0-dcr3.
+def DPSW  : RXReg<0, "dpsw">;
+def DCMR  : RXReg<1, "dcmr">;
+def DECNT : RXReg<2, "decnt">;
+def DEPC  : RXReg<3, "depc">;
+
 // Allocation order: caller-saved registers first, then callee-saved; R0 (SP)
 // is reserved.
 def GPR : RegisterClass<"RX", [i32], 32,
@@ -66,5 +80,15 @@ def CTRL : RegisterClass<"RX", [i32], 32,
 }
 
 def ACC : RegisterClass<"RX", [i64], 64, (add ACC0, ACC1)> {
+  let isAllocatable = 0;
+}
+
+def DRH : RegisterClass<"RX", [i32], 32, (sequence "DRH%u", 0, 15)> {
+  let isAllocatable = 0;
+}
+def DRL : RegisterClass<"RX", [i32], 32, (sequence "DRL%u", 0, 15)> {
+  let isAllocatable = 0;
+}
+def DCR : RegisterClass<"RX", [i32], 32, (add DPSW, DCMR, DECNT, DEPC)> {
   let isAllocatable = 0;
 }
