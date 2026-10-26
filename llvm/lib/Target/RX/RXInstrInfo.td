@@ -1807,8 +1807,7 @@ def : Pat<(i32 (extloadi8 AddrB:$a)), (LD_UB AddrB:$a)>;
 def : Pat<(i32 (extloadi16 AddrW:$a)), (LD_UW AddrW:$a)>;
 
 // Naturally aligned accesses of up to 32 bits are single instructions, so
-// atomic loads and stores are plain MOVs (RX parts are single-core; there is
-// no compare-and-swap, so read-modify-write atomics are not supported). The
+// atomic loads and stores are plain MOVs (RX parts are single-core). The
 // atomic memory operands keep later passes from caching or hoisting them.
 def : Pat<(i32 (atomic_load_nonext_32 AddrL:$a)), (LD_L AddrL:$a)>;
 def : Pat<(i32 (atomic_load_zext_8 AddrB:$a)), (LD_UB AddrB:$a)>;
@@ -1820,6 +1819,18 @@ def : Pat<(i32 (atomic_load_sext_16 AddrW:$a)), (LD_W AddrW:$a)>;
 def : Pat<(atomic_store_32 GPR:$v, AddrL:$a), (ST_L GPR:$v, AddrL:$a)>;
 def : Pat<(atomic_store_16 GPR:$v, AddrW:$a), (ST_W GPR:$v, AddrW:$a)>;
 def : Pat<(atomic_store_8 GPR:$v, AddrB:$a), (ST_B GPR:$v, AddrB:$a)>;
+
+// 32-bit compare-and-swap: $dst = [$ptr]; if $dst == $cmp, [$ptr] = $new.
+// RXAsmPrinter expands it after register allocation (so that nothing is
+// spilled inside the sequence) into a MOVLI/MOVCO loop on RXv2 and later,
+// or into a load / compare / store with interrupts masked on RXv1. $tmp
+// holds the MOVCO result or the saved PSW. Both expansions are 16 bytes.
+let mayLoad = 1, mayStore = 1, hasSideEffects = 1, Defs = [PSW], Size = 16,
+    Constraints = "@earlyclobber $dst,@earlyclobber $tmp" in
+def CMPXCHG32 : RXPseudo<(outs GPR:$dst, GPR:$tmp),
+                         (ins GPR:$ptr, GPR:$cmp, GPR:$new)>;
+def : Pat<(atomic_cmp_swap_i32 GPR:$ptr, GPR:$cmp, GPR:$new),
+          (CMPXCHG32 GPR:$ptr, GPR:$cmp, GPR:$new)>;
 
 // llvm.trap / llvm.debugtrap: BRK raises the unconditional trap exception.
 def : Pat<(trap), (BRK)>;

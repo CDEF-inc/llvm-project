@@ -85,9 +85,11 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
 
   // Atomic loads and stores of up to 32 bits are plain MOVs and fences are
-  // compiler barriers (RX parts are single-core). There is no
-  // compare-and-swap, so frontends must not emit read-modify-write atomics.
+  // compiler barriers (RX parts are single-core). A 32-bit compare-and-swap
+  // is the CMPXCHG32 pseudo (see RXAsmPrinter); AtomicExpand turns narrower
+  // ones into it, and read-modify-write operations into a loop around it.
   setMaxAtomicSizeInBitsSupported(32);
+  setMinCmpXchgSizeInBits(32);
   setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Custom);
 
   // llvm.trap / llvm.debugtrap are BRK (the default would call abort()).
