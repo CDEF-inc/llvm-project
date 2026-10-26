@@ -80,7 +80,8 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   // -m64bit-doubles ABI (values in general registers). So is float without
   // +fpu; with it, float lives in the general registers (where the FPU works
   // on it, and where the ABI passes it anyway) and only fast-math operations
-  // use FPU instructions; see lowerFPArith and emitCMP.
+  // in functions that allow flushing denormals use FPU instructions; see
+  // canUseFPU, lowerFPArith and emitCMP.
   if (STI.hasFPU()) {
     for (unsigned Op : {ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV})
       setOperationAction(Op, MVT::f32, Custom);
@@ -117,7 +118,8 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   // passes it), and fast-math operations and integer-to-double conversions
   // are replaced before type legalization by DFPU sequences (see
   // PerformDAGCombine). Like the FPU, the DFPU flushes or traps on denormals
-  // (DPSW.DDN), so only operations marked nnan and ninf use it;
+  // (DPSW.DDN), so only operations marked nnan and ninf in functions whose
+  // double denormal environment is preserve-sign use it (canUseFPU);
   // integer-to-double conversions are exact. BR_CC is Custom only so that
   // DAGCombiner forms it from brcond + setcc (keeping the fast-math flags);
   // softening does not call the target.
@@ -208,17 +210,25 @@ SDValue RXTargetLowering::lowerBlockAddress(SDValue Op,
 }
 
 // The RX FPU gives IEEE results only for operands that are not NaN,
-// infinite or denormal; the code generator uses it for operations whose
-// operands and results may be assumed not to be NaN or infinite (denormals
-// are flushed when the program sets FPSW.DN).
-static bool canUseFPU(SDNodeFlags Flags) {
-  return Flags.hasNoNaNs() && Flags.hasNoInfs();
+// infinite or denormal: denormal operands and results raise an
+// unimplemented-processing exception with FPSW.DN = 0 and are flushed to a
+// zero of the same sign with DN = 1 (the reset value, which rx-rt also
+// sets). The code generator therefore uses it only for operations that may
+// be assumed not to involve NaNs or infinities (nnan and ninf) in functions
+// whose denormal environment for the type allows flushing with the sign kept
+// (denormal_fpenv(preservesign), e.g. -fdenormal-fp-math=preserve-sign);
+// with the default IEEE environment everything stays soft-float.
+static bool canUseFPU(SDNodeFlags Flags, const SelectionDAG &DAG, EVT VT) {
+  if (!Flags.hasNoNaNs() || !Flags.hasNoInfs())
+    return false;
+  return DAG.getMachineFunction().getDenormalMode(VT.getFltSemantics()) ==
+         DenormalMode::getPreserveSign();
 }
 
 // float arithmetic: an FPU instruction for fast-math operations (the node is
 // legal as is), a libcall otherwise.
 SDValue RXTargetLowering::lowerFPArith(SDValue Op, SelectionDAG &DAG) const {
-  if (canUseFPU(Op->getFlags()))
+  if (canUseFPU(Op->getFlags(), DAG, Op.getValueType()))
     return Op;
   RTLIB::Libcall LC;
   switch (Op.getOpcode()) {
@@ -251,8 +261,11 @@ static SDValue joinF64(SDValue Pair, const SDLoc &DL, SelectionDAG &DAG) {
                                     Pair.getValue(0), Pair.getValue(1)));
 }
 
-static bool isDFPUOperand(SDValue V, SDNodeFlags Flags) {
-  return V.getValueType() == MVT::f64 && canUseFPU(Flags);
+// The DFPU treats denormals like the FPU (DPSW.DDN), so the same conditions
+// apply, with the denormal environment for double.
+static bool isDFPUOperand(SDValue V, SDNodeFlags Flags,
+                          const SelectionDAG &DAG) {
+  return V.getValueType() == MVT::f64 && canUseFPU(Flags, DAG, MVT::f64);
 }
 
 // double (+dfpu), before type legalization: DFPU sequences for fast-math
@@ -271,7 +284,7 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::FSUB:
   case ISD::FMUL:
   case ISD::FDIV: {
-    if (!isDFPUOperand(SDValue(N, 0), N->getFlags()))
+    if (!isDFPUOperand(SDValue(N, 0), N->getFlags(), DAG))
       return SDValue();
     unsigned Op = N->getOpcode() == ISD::FADD   ? 0
                   : N->getOpcode() == ISD::FSUB ? 1
@@ -285,7 +298,7 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
                    DL, DAG);
   }
   case ISD::FSQRT: {
-    if (!isDFPUOperand(SDValue(N, 0), N->getFlags()))
+    if (!isDFPUOperand(SDValue(N, 0), N->getFlags(), DAG))
       return SDValue();
     auto [Lo, Hi] = splitF64(N->getOperand(0), DL, DAG);
     return joinF64(DAG.getNode(RXISD::DSQRT, DL, Pair, Lo, Hi), DL, DAG);
@@ -304,7 +317,7 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
     bool IsSetCC = N->getOpcode() == ISD::SETCC;
     ISD::CondCode Cond =
         cast<CondCodeSDNode>(N->getOperand(IsSetCC ? 2 : 4))->get();
-    if (!canLowerDFPUCompare(N->getOperand(0), Cond, N->getFlags()))
+    if (!canLowerDFPUCompare(N->getOperand(0), Cond, N->getFlags(), DAG))
       return SDValue();
     RXCC::CondCode CC;
     SDValue Glue = emitCMP(N->getOperand(0), N->getOperand(1), Cond,
@@ -318,7 +331,7 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
   }
   case ISD::BR_CC: {
     ISD::CondCode Cond = cast<CondCodeSDNode>(N->getOperand(1))->get();
-    if (!canLowerDFPUCompare(N->getOperand(2), Cond, N->getFlags()))
+    if (!canLowerDFPUCompare(N->getOperand(2), Cond, N->getFlags(), DAG))
       return SDValue();
     RXCC::CondCode CC;
     SDValue Glue = emitCMP(N->getOperand(2), N->getOperand(3), Cond,
@@ -344,7 +357,8 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
   if (LHS.getValueType() == MVT::f64) {
     // Fast-math double compare (callers check canLowerDFPUCompare):
     // DCMPcm Y, X sets DCMR.RES = X cm Y, MVFDR copies it to PSW.Z.
-    assert(canLowerDFPUCompare(LHS, Cond, Flags) && "not a DFPU compare");
+    assert(canLowerDFPUCompare(LHS, Cond, Flags, DAG) &&
+           "not a DFPU compare");
     SDValue X = LHS, Y = RHS;
     unsigned CM;
     CC = RXCC::EQ;
@@ -372,7 +386,8 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
   }
 
   if (LHS.getValueType() == MVT::f32) {
-    if (canUseFPU(Flags) && Cond != ISD::SETO && Cond != ISD::SETUO) {
+    if (canUseFPU(Flags, DAG, MVT::f32) && Cond != ISD::SETO &&
+        Cond != ISD::SETUO) {
       switch (Cond) {
       case ISD::SETEQ: case ISD::SETOEQ: case ISD::SETUEQ:
         CC = RXCC::EQ; break;
@@ -428,8 +443,10 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
 // A double compare (only seen with +dfpu) that the DFPU can do; the others
 // keep the default soft-float expansion.
 bool RXTargetLowering::canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
-                                           SDNodeFlags Flags) const {
-  return isDFPUOperand(LHS, Flags) && Cond != ISD::SETO && Cond != ISD::SETUO;
+                                           SDNodeFlags Flags,
+                                           const SelectionDAG &DAG) const {
+  return isDFPUOperand(LHS, Flags, DAG) && Cond != ISD::SETO &&
+         Cond != ISD::SETUO;
 }
 
 SDValue RXTargetLowering::lowerBR_CC(SDValue Op, SelectionDAG &DAG) const {

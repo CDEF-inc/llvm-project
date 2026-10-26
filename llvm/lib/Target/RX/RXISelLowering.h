@@ -60,8 +60,8 @@ private:
   SDValue lowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFPArith(SDValue Op, SelectionDAG &DAG) const;
-  bool canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
-                           SDNodeFlags Flags) const;
+  bool canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond, SDNodeFlags Flags,
+                           const SelectionDAG &DAG) const;
   SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
                   SDNodeFlags Flags, RXCC::CondCode &CC, const SDLoc &DL,
                   SelectionDAG &DAG) const;
