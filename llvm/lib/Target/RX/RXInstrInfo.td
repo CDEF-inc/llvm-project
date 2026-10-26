@@ -1495,18 +1495,19 @@ class DFPU2<bits<4> sub, bits<4> sub2, string mn>
 }
 
 // Transfers between a general register and a DFPU register:
-// 1111 1101 0111 01d1 1000 gr dr op   (d = 1: to the DFPU register), or with
-// the two register fields swapped (ftod/itod/utod/mvtdc: 1000 dr gr op).
-class DFPUXfer<bit d, bits<4> op, dag outs, dag ins, string asmstr,
-               bit swap = 0>
+// 1111 1101 0111 01d1 1000 gr dr op   (d = 1: to the DFPU register)
+// The general register is always in bits 11-8 (RXv3 manual, section 4).
+// GNU as 2.43 swaps the two fields for ftod / itod / utod / mvtdc, so for
+// those the assembler tests check the manual's bytes instead of GNU as.
+class DFPUXfer<bit d, bits<4> op, dag outs, dag ins, string asmstr>
     : RXInst32<outs, ins, asmstr> {
   bits<4> gr;
   bits<4> dr;
   let Inst{31-24} = 0xfd;
   let Inst{23-16} = {0b011101, d, 0b1};
   let Inst{15-12} = 0x8;
-  let Inst{11-8} = !if(swap, dr, gr);
-  let Inst{7-4} = !if(swap, gr, dr);
+  let Inst{11-8} = gr;
+  let Inst{7-4} = dr;
   let Inst{3-0} = op;
 }
 
@@ -1612,9 +1613,9 @@ foreach C = [RXDCC<"un", 1>, RXDCC<"eq", 2>, RXDCC<"lt", 4>,
   }
 
 // Integer / single-precision to double: ftod / itod / utod Rs, DRd.
-def FTOD : DFPUXfer<1, 0xa, (outs DPR:$dr), (ins GPR:$gr), "ftod\t$gr, $dr", 1>;
-def ITOD : DFPUXfer<1, 0x9, (outs DPR:$dr), (ins GPR:$gr), "itod\t$gr, $dr", 1>;
-def UTOD : DFPUXfer<1, 0xd, (outs DPR:$dr), (ins GPR:$gr), "utod\t$gr, $dr", 1>;
+def FTOD : DFPUXfer<1, 0xa, (outs DPR:$dr), (ins GPR:$gr), "ftod\t$gr, $dr">;
+def ITOD : DFPUXfer<1, 0x9, (outs DPR:$dr), (ins GPR:$gr), "itod\t$gr, $dr">;
+def UTOD : DFPUXfer<1, 0xd, (outs DPR:$dr), (ins GPR:$gr), "utod\t$gr, $dr">;
 
 // dmov.d Rs, DRHn sets DRn to Rs:0; dmov.l writes or reads one half.
 def DMOV_D_rh : DFPUXfer<1, 0x3, (outs DRH:$dr), (ins GPR:$gr),
@@ -1628,8 +1629,7 @@ def DMOV_L_hr : DFPUXfer<0, 0x2, (outs GPR:$gr), (ins DRH:$dr),
 def DMOV_L_lr : DFPUXfer<0, 0x0, (outs GPR:$gr), (ins DRL:$dr),
                          "dmov.l\t$dr, $gr">;
 
-def MVTDC : DFPUXfer<1, 0x4, (outs DCR:$dr), (ins GPR:$gr), "mvtdc\t$gr, $dr",
-                     1>;
+def MVTDC : DFPUXfer<1, 0x4, (outs DCR:$dr), (ins GPR:$gr), "mvtdc\t$gr, $dr">;
 def MVFDC : DFPUXfer<0, 0x4, (outs GPR:$gr), (ins DCR:$dr), "mvfdc\t$dr, $gr">;
 def MVFDR : RXInst24<(outs), (ins), "mvfdr"> {
   let Inst = 0x75901b;
