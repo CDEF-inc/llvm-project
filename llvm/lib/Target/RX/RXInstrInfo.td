@@ -1393,6 +1393,283 @@ def MOVCO : RXInst24<(outs GPR:$res), (ins GPR:$rs, GPR:$rd),
 }
 
 //===----------------------------------------------------------------------===//
+// RXv3: bit-field move, register bank save / restore
+//===----------------------------------------------------------------------===//
+
+// bfmov / bfmovz #slsb, #dlsb, #width, Rs, Rd: copy `width` bits of Rs
+// starting at bit slsb to Rd starting at bit dlsb (bfmovz clears the other
+// bits of Rd). 1111 1100 0101 1z10 rs rd imm16, where imm16 (little-endian)
+// is ((dlsb + width) & 31) << 10 | dlsb << 5 | ((dlsb - slsb) & 31).
+def BfLsbClass   : RXImmClass<"BfLsb">;
+def BfWidthClass : RXImmClass<"BfWidth">;
+def bflsb : Operand<i32> { let ParserMatchClass = BfLsbClass; }
+def bfwidth : Operand<i32> {
+  let ParserMatchClass = BfWidthClass;
+  let EncoderMethod = "getBfieldOpValue";
+}
+class BFMov<bits<8> op, string mn, dag outs, dag rdin, string cons>
+    : RXInst40<outs, !con(rdin, (ins bflsb:$slsb, bflsb:$dlsb,
+                                     bfwidth:$width, GPR:$rs)),
+               mn#"\t$slsb, $dlsb, $width, $rs, $rd"> {
+  let Constraints = cons;
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> width;
+  let Inst{39-32} = 0xfc;
+  let Inst{31-24} = op;
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = width{7-0};
+  let Inst{7-0} = width{15-8};
+}
+
+let Predicates = [HasRXv3] in {
+def BFMOV  : BFMov<0x5e, "bfmov", (outs GPR:$rd), (ins GPR:$src),
+                   "$src = $rd">;
+def BFMOVZ : BFMov<0x5a, "bfmovz", (outs GPR:$rd), (ins), "">;
+
+let hasSideEffects = 1 in {
+// save / rstr Rs | #imm: 1111 1101 0111 0110 11r0 rs 0000 0000 /
+// 1111 1101 0111 0110 111r 0000 imm8
+class SaveRstrR<bit r, string mn>
+    : RXInst32<(outs), (ins GPR:$rs), mn#"\t$rs"> {
+  bits<4> rs;
+  let Inst{31-16} = 0xfd76;
+  let Inst{15-12} = {0b110, r};
+  let Inst{11-8} = rs;
+  let Inst{7-0} = 0x00;
+}
+class SaveRstrI<bit r, string mn>
+    : RXInst32<(outs), (ins immu8:$imm), mn#"\t$imm"> {
+  bits<8> imm;
+  let Inst{31-16} = 0xfd76;
+  let Inst{15-12} = {0b111, r};
+  let Inst{11-8} = 0x0;
+  let Inst{7-0} = imm;
+}
+def SAVE_r : SaveRstrR<0, "save">;
+def SAVE_i : SaveRstrI<0, "save">;
+def RSTR_r : SaveRstrR<1, "rstr">;
+def RSTR_i : SaveRstrI<1, "rstr">;
+}
+}
+
+//===----------------------------------------------------------------------===//
+// RXv3 double-precision FPU (DFPU)
+//===----------------------------------------------------------------------===//
+
+// dsp[Rn] for 64-bit accesses (scaled by 8).
+def Dsp16DClass : RXDspClass<"Dsp16D">;
+def Dsp8DClass  : RXDspClass<"Dsp8D", [Dsp16DClass]>;
+def dsp8d  : RXDsp<"Dsp8D", 3>;
+def dsp16d : RXDsp<"Dsp16D", 3>;
+
+// The second register of a DRm-DRn / DCRm-DCRn range, encoded as n - m.
+def dprhi : RegisterOperand<DPR> { let EncoderMethod = "getRegRangeOpValue"; }
+def dcrhi : RegisterOperand<DCR> { let EncoderMethod = "getRegRangeOpValue"; }
+
+// op DRs, DRs2, DRd: 0111 0110 1001 0000 rs2 op rd rs
+class DFPU3<bits<4> op, string mn>
+    : RXInst32<(outs DPR:$rd), (ins DPR:$rs, DPR:$rs2),
+               mn#"\t$rs, $rs2, $rd"> {
+  bits<4> rs;
+  bits<4> rs2;
+  bits<4> rd;
+  let Inst{31-16} = 0x7690;
+  let Inst{15-12} = rs2;
+  let Inst{11-8} = op;
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+
+// op DRs, DRd: 0111 0110 1001 0000 rs sub rd sub2
+class DFPU2<bits<4> sub, bits<4> sub2, string mn>
+    : RXInst32<(outs DPR:$rd), (ins DPR:$rs), mn#"\t$rs, $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{31-16} = 0x7690;
+  let Inst{15-12} = rs;
+  let Inst{11-8} = sub;
+  let Inst{7-4} = rd;
+  let Inst{3-0} = sub2;
+}
+
+// Transfers between a general register and a DFPU register:
+// 1111 1101 0111 01d1 1000 gr dr op   (d = 1: to the DFPU register)
+// The general register is always in bits 11-8 (RXv3 manual, section 4).
+// GNU as 2.43 swaps the two fields for ftod / itod / utod / mvtdc, so for
+// those the assembler tests check the manual's bytes instead of GNU as.
+class DFPUXfer<bit d, bits<4> op, dag outs, dag ins, string asmstr>
+    : RXInst32<outs, ins, asmstr> {
+  bits<4> gr;
+  bits<4> dr;
+  let Inst{31-24} = 0xfd;
+  let Inst{23-16} = {0b011101, d, 0b1};
+  let Inst{15-12} = 0x8;
+  let Inst{11-8} = gr;
+  let Inst{7-4} = dr;
+  let Inst{3-0} = op;
+}
+
+// dmov.d DRs, [Rb] / dsp[Rb]: 1111 1100 0111 10sd rb 1000 [dsp] dr 0000
+// dmov.d [Rb] / dsp[Rb], DRd: 1111 1100 1100 10sd rb 1000 [dsp] dr 0000
+class DMovMem0<bits<8> op, dag outs, dag ins, string asmstr>
+    : RXInst32<outs, ins, asmstr> {
+  bits<4> rb;
+  bits<4> dr;
+  let Inst{31-24} = 0xfc;
+  let Inst{23-16} = op;
+  let Inst{15-12} = rb;
+  let Inst{11-8} = 0x8;
+  let Inst{7-4} = dr;
+  let Inst{3-0} = 0x0;
+}
+class DMovMem8<bits<8> op, dag outs, dag ins, string asmstr>
+    : RXInst40<outs, ins, asmstr> {
+  bits<4> rb;
+  bits<4> dr;
+  bits<8> dsp;
+  let Inst{39-32} = 0xfc;
+  let Inst{31-24} = op;
+  let Inst{23-20} = rb;
+  let Inst{19-16} = 0x8;
+  let Inst{15-8} = dsp;
+  let Inst{7-4} = dr;
+  let Inst{3-0} = 0x0;
+}
+class DMovMem16<bits<8> op, dag outs, dag ins, string asmstr>
+    : RXInst48<outs, ins, asmstr> {
+  bits<4> rb;
+  bits<4> dr;
+  bits<16> dsp;
+  let Inst{47-40} = 0xfc;
+  let Inst{39-32} = op;
+  let Inst{31-28} = rb;
+  let Inst{27-24} = 0x8;
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = dsp{15-8};
+  let Inst{7-4} = dr;
+  let Inst{3-0} = 0x0;
+}
+
+// dmov.{d,l} #imm32, DRHn / DRLn: 1111 1001 0000 0011 dr op imm32
+class DMovImm<bits<4> op, string mn, RegisterClass rc>
+    : RXInst56<(outs rc:$dr), (ins imm32:$imm), mn#"\t$imm, $dr"> {
+  bits<4> dr;
+  bits<32> imm;
+  let Inst{55-40} = 0xf903;
+  let Inst{39-36} = dr;
+  let Inst{35-32} = op;
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+
+// dpushm / dpopm: 0111 0101 1 0 kind(1) 1 pop(1) 000 lo count
+class DPushPop<bits<8> op, string mn, RegisterClass rc, RegisterOperand hi>
+    : RXInst24<(outs), (ins rc:$lo, hi:$hi), mn#"\t$lo-$hi"> {
+  bits<4> lo;
+  bits<4> hi;
+  let Inst{23-16} = 0x75;
+  let Inst{15-8} = op;
+  let Inst{7-4} = lo;
+  let Inst{3-0} = hi;
+}
+
+// Condition of dcmp<cond>.
+class RXDCC<string n, int v> {
+  string Name = n;
+  int Value = v;
+}
+
+let Predicates = [HasDFPU], hasSideEffects = 1 in {
+def DADD : DFPU3<0x0, "dadd">;
+def DSUB : DFPU3<0x1, "dsub">;
+def DMUL : DFPU3<0x2, "dmul">;
+def DDIV : DFPU3<0x5, "ddiv">;
+
+def DMOV_D_rr : DFPU2<0xc, 0x0, "dmov.d">;
+def DABS   : DFPU2<0xc, 0x1, "dabs">;
+def DNEG   : DFPU2<0xc, 0x2, "dneg">;
+def DSQRT  : DFPU2<0xd, 0x0, "dsqrt">;
+def DTOI   : DFPU2<0xd, 0x8, "dtoi">;
+def DTOU   : DFPU2<0xd, 0x9, "dtou">;
+def DTOF   : DFPU2<0xd, 0xc, "dtof">;
+def DROUND : DFPU2<0xd, 0xd, "dround">;
+
+// dcmp<cond> DRs, DRs2: 0111 0110 1001 0000 rs2 1000 cond rs
+foreach C = [RXDCC<"un", 1>, RXDCC<"eq", 2>, RXDCC<"lt", 4>,
+             RXDCC<"le", 6>] in
+  def DCMP#!toupper(C.Name)
+      : RXInst32<(outs), (ins DPR:$rs, DPR:$rs2), "dcmp"#C.Name#"\t$rs, $rs2"> {
+    bits<4> rs;
+    bits<4> rs2;
+    let Inst{31-16} = 0x7690;
+    let Inst{15-12} = rs2;
+    let Inst{11-8} = 0x8;
+    let Inst{7-4} = C.Value;
+    let Inst{3-0} = rs;
+  }
+
+// Integer / single-precision to double: ftod / itod / utod Rs, DRd.
+def FTOD : DFPUXfer<1, 0xa, (outs DPR:$dr), (ins GPR:$gr), "ftod\t$gr, $dr">;
+def ITOD : DFPUXfer<1, 0x9, (outs DPR:$dr), (ins GPR:$gr), "itod\t$gr, $dr">;
+def UTOD : DFPUXfer<1, 0xd, (outs DPR:$dr), (ins GPR:$gr), "utod\t$gr, $dr">;
+
+// dmov.d Rs, DRHn sets DRn to Rs:0; dmov.l writes or reads one half.
+def DMOV_D_rh : DFPUXfer<1, 0x3, (outs DRH:$dr), (ins GPR:$gr),
+                         "dmov.d\t$gr, $dr">;
+def DMOV_L_rh : DFPUXfer<1, 0x2, (outs DRH:$dr), (ins GPR:$gr),
+                         "dmov.l\t$gr, $dr">;
+def DMOV_L_rl : DFPUXfer<1, 0x0, (outs DRL:$dr), (ins GPR:$gr),
+                         "dmov.l\t$gr, $dr">;
+def DMOV_L_hr : DFPUXfer<0, 0x2, (outs GPR:$gr), (ins DRH:$dr),
+                         "dmov.l\t$dr, $gr">;
+def DMOV_L_lr : DFPUXfer<0, 0x0, (outs GPR:$gr), (ins DRL:$dr),
+                         "dmov.l\t$dr, $gr">;
+
+def MVTDC : DFPUXfer<1, 0x4, (outs DCR:$dr), (ins GPR:$gr), "mvtdc\t$gr, $dr">;
+def MVFDC : DFPUXfer<0, 0x4, (outs GPR:$gr), (ins DCR:$dr), "mvfdc\t$dr, $gr">;
+def MVFDR : RXInst24<(outs), (ins), "mvfdr"> {
+  let Inst = 0x75901b;
+}
+
+let mayStore = 1 in {
+def DMOV_D_st0 : DMovMem0<0x78, (outs), (ins DPR:$dr, GPR:$rb),
+                          "dmov.d\t$dr, [$rb]">;
+def DMOV_D_st8 : DMovMem8<0x79, (outs), (ins DPR:$dr, GPR:$rb, dsp8d:$dsp),
+                          "dmov.d\t$dr, $dsp[$rb]">;
+def DMOV_D_st16 : DMovMem16<0x7a, (outs),
+                            (ins DPR:$dr, GPR:$rb, dsp16d:$dsp),
+                            "dmov.d\t$dr, $dsp[$rb]">;
+}
+let mayLoad = 1 in {
+def DMOV_D_ld0 : DMovMem0<0xc8, (outs DPR:$dr), (ins GPR:$rb),
+                          "dmov.d\t[$rb], $dr">;
+def DMOV_D_ld8 : DMovMem8<0xc9, (outs DPR:$dr), (ins GPR:$rb, dsp8d:$dsp),
+                          "dmov.d\t$dsp[$rb], $dr">;
+def DMOV_D_ld16 : DMovMem16<0xca, (outs DPR:$dr), (ins GPR:$rb, dsp16d:$dsp),
+                            "dmov.d\t$dsp[$rb], $dr">;
+}
+
+def DMOV_D_ih : DMovImm<0x3, "dmov.d", DRH>;
+def DMOV_L_ih : DMovImm<0x2, "dmov.l", DRH>;
+def DMOV_L_il : DMovImm<0x0, "dmov.l", DRL>;
+
+let Uses = [R0], Defs = [R0] in {
+let mayStore = 1 in {
+def DPUSHM_D : DPushPop<0xb0, "dpushm.d", DPR, dprhi>;
+def DPUSHM_L : DPushPop<0xa0, "dpushm.l", DCR, dcrhi>;
+}
+let mayLoad = 1 in {
+def DPOPM_D : DPushPop<0xb8, "dpopm.d", DPR, dprhi>;
+def DPOPM_L : DPushPop<0xa8, "dpopm.l", DCR, dcrhi>;
+}
+}
+} // Predicates = [HasDFPU]
+
+//===----------------------------------------------------------------------===//
 // Code generation
 //
 // Instruction selection always picks the longest form of an instruction
