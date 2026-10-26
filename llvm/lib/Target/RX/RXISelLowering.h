@@ -33,6 +33,12 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
 
+  // Every atomicrmw becomes a compare-and-swap loop.
+  AtomicExpansionKind
+  shouldExpandAtomicRMWInIR(const AtomicRMWInst *RMW) const override {
+    return AtomicExpansionKind::CmpXChg;
+  }
+
   ConstraintType getConstraintType(StringRef Constraint) const override;
   std::pair<unsigned, const TargetRegisterClass *>
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
