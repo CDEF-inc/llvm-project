@@ -20,6 +20,21 @@ class RXSelectionDAGInfo : public SelectionDAGGenTargetInfo {
 public:
   RXSelectionDAGInfo();
   ~RXSelectionDAGInfo() override;
+
+  // memcpy / memset that are not expanded to loads and stores (a variable
+  // or large size) use the string instructions instead of a call.
+  SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, const SDLoc &DL,
+                                  SDValue Chain, SDValue Dst, SDValue Src,
+                                  SDValue Size, Align DstAlign,
+                                  Align SrcAlign, bool IsVolatile,
+                                  bool AlwaysInline,
+                                  MachinePointerInfo DstPtrInfo,
+                                  MachinePointerInfo SrcPtrInfo) const override;
+  SDValue EmitTargetCodeForMemset(SelectionDAG &DAG, const SDLoc &DL,
+                                  SDValue Chain, SDValue Dst, SDValue Val,
+                                  SDValue Size, Align Alignment,
+                                  bool IsVolatile, bool AlwaysInline,
+                                  MachinePointerInfo DstPtrInfo) const override;
 };
 
 } // end namespace llvm
