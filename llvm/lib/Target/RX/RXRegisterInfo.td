@@ -34,6 +34,15 @@ def FINTV : RXReg<11, "fintv">;
 def INTB  : RXReg<12, "intb">;
 def EXTB  : RXReg<13, "extb">;
 
+// RXv3e (Protect Zone) control registers. TRCTB and WINTB are reached only
+// through TRMVTC / TRMVFC, where cr 14 and 15 name them instead of WPRI and
+// WID. The assembler accepts these names only for RXv3e.
+def IVC   : RXReg<5, "ivc">;
+def WPRI  : RXReg<14, "wpri">;
+def WID   : RXReg<15, "wid">;
+def TRCTB : RXReg<14, "trctb">;
+def WINTB : RXReg<15, "wintb">;
+
 // DSP accumulators (RXv2+).
 def ACC0 : RXReg<0, "a0">;
 def ACC1 : RXReg<1, "a1">;
@@ -75,7 +84,14 @@ def CCR : RegisterClass<"RX", [i32], 32, (add PSW, FPSW)> {
 
 def CTRL : RegisterClass<"RX", [i32], 32,
                          (add PSW, PC, USP, FPSW, BPSW, BPC, ISP, FINTV,
-                              INTB, EXTB)> {
+                              INTB, EXTB, IVC, WPRI, WID)> {
+  let isAllocatable = 0;
+}
+
+// The root-world control registers of TRMVTC / TRMVFC (RXv3e).
+def TRCTRL : RegisterClass<"RX", [i32], 32,
+                           (add IVC, BPSW, BPC, ISP, INTB, EXTB, TRCTB,
+                                WINTB)> {
   let isAllocatable = 0;
 }
 

@@ -35,9 +35,10 @@ def FeatureFPU
 def Feature64BitDoubles
     : SubtargetFeature<"64bit-doubles", "Has64BitDoubles", "true",
                        "double is 64 bits (GCC -m64bit-doubles)">;
-// RXv3e (RX74M/RX74N) is upward compatible with RXv3 and adds Protect Zone.
-// Its new instructions are not modelled yet; see the RXv3e ISA manual
-// (R01US0745EJ).
+// RXv3e (RX74M/RX74N) is upward compatible with RXv3 and adds Protect Zone:
+// TRCALL, TRRTE, TRMVTC, TRMVFC, INT Rs, a 5-bit MVTIPL and the IVC, WPRI,
+// WID, TRCTB and WINTB control registers (RXv3e ISA manual, R01US0745EJ).
+// Only the assembler knows them; code generation does not use them.
 def FeatureRXv3e
     : SubtargetFeature<"rxv3e", "HasRXv3e", "true",
                        "Enable RXv3e instructions", [FeatureRXv3]>;
@@ -46,6 +47,8 @@ def HasRXv2 : Predicate<"Subtarget->hasRXv2()">,
               AssemblerPredicate<(all_of FeatureRXv2), "RXv2">;
 def HasRXv3 : Predicate<"Subtarget->hasRXv3()">,
               AssemblerPredicate<(all_of FeatureRXv3), "RXv3">;
+def HasRXv3e : Predicate<"Subtarget->hasRXv3e()">,
+               AssemblerPredicate<(all_of FeatureRXv3e), "RXv3e">;
 def HasDFPU : Predicate<"Subtarget->hasDFPU()">,
               AssemblerPredicate<(all_of FeatureDFPU), "DFPU">;
 // Code generation only: the assembler accepts FPU instructions for every
