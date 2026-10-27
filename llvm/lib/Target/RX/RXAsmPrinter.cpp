@@ -61,6 +61,7 @@ public:
     Lower.lower(MI, Inst);
     shrinkRXInst(Inst);
     EmitToStreamer(*OutStreamer, Inst);
+    noteRXInstruction(*OutStreamer, Inst.getOpcode());
   }
 
   // Inline assembly operands: registers by name (r1), immediates as plain
