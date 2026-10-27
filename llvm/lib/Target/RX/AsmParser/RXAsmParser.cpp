@@ -347,14 +347,28 @@ ParseStatus RXAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
   // General-purpose, control, accumulator and DFPU registers are written by
   // name in operands.
   static const unsigned Classes[] = {
-      RX::GPRRegClassID, RX::CTRLRegClassID, RX::ACCRegClassID,
-      RX::DPRRegClassID, RX::DRHRegClassID,  RX::DRLRegClassID,
-      RX::DCRRegClassID};
+      RX::GPRRegClassID, RX::CTRLRegClassID, RX::TRCTRLRegClassID,
+      RX::ACCRegClassID, RX::DPRRegClassID,  RX::DRHRegClassID,
+      RX::DRLRegClassID, RX::DCRRegClassID};
   const MCRegisterInfo *MRI = getContext().getRegisterInfo();
   if (!Reg || llvm::none_of(Classes, [&](unsigned RC) {
         return MRI->getRegClass(RC).contains(Reg);
       }))
     return ParseStatus::NoMatch;
+  // The Protect Zone control registers exist only on RXv3e; elsewhere the
+  // names are ordinary symbols.
+  switch (Reg.id()) {
+  case RX::IVC:
+  case RX::WPRI:
+  case RX::WID:
+  case RX::TRCTB:
+  case RX::WINTB:
+    if (!getSTI().hasFeature(RX::FeatureRXv3e))
+      return ParseStatus::NoMatch;
+    break;
+  default:
+    break;
+  }
   getParser().Lex();
   return ParseStatus::Success;
 }

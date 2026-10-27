@@ -899,48 +899,49 @@ def MVFC : RXInst24<(outs GPR:$rd), (ins CTRL:$cr), "mvfc\t$cr, $rd"> {
   let Inst{7-4} = cr;
   let Inst{3-0} = rd;
 }
-// mvtc #imm, cr: 1111 1101 0111 im11 000 cr[5] imm
-def MVTC_i8 : RXInst32<(outs CTRL:$cr), (ins imms8:$imm), "mvtc\t$imm, $cr"> {
-  bits<4> cr;
-  bits<8> imm;
-  let Inst{31-24} = 0xfd;
-  let Inst{23-16} = 0x77;
-  let Inst{15-8} = {0b0000, cr};
-  let Inst{7-0} = imm;
+// mvtc #imm, cr:   1111 1101 0111 li11 0000 cr imm
+// trmvtc #imm, cr: 1111 1101 0111 li11 0010 cr imm (RXv3e)
+multiclass MvtcImm<bits<4> op, RegisterClass rc, string mn> {
+  def _i8 : RXInst32<(outs rc:$cr), (ins imms8:$imm), mn#"\t$imm, $cr"> {
+    bits<4> cr;
+    bits<8> imm;
+    let Inst{31-24} = 0xfd;
+    let Inst{23-16} = 0x77;
+    let Inst{15-8} = {op, cr};
+    let Inst{7-0} = imm;
+  }
+  def _i16 : RXInst40<(outs rc:$cr), (ins imms16:$imm), mn#"\t$imm, $cr"> {
+    bits<4> cr;
+    bits<16> imm;
+    let Inst{39-32} = 0xfd;
+    let Inst{31-24} = 0x7b;
+    let Inst{23-16} = {op, cr};
+    let Inst{15-8} = imm{7-0};
+    let Inst{7-0} = imm{15-8};
+  }
+  def _i24 : RXInst48<(outs rc:$cr), (ins imms24:$imm), mn#"\t$imm, $cr"> {
+    bits<4> cr;
+    bits<24> imm;
+    let Inst{47-40} = 0xfd;
+    let Inst{39-32} = 0x7f;
+    let Inst{31-24} = {op, cr};
+    let Inst{23-16} = imm{7-0};
+    let Inst{15-8} = imm{15-8};
+    let Inst{7-0} = imm{23-16};
+  }
+  def _i32 : RXInst56<(outs rc:$cr), (ins imm32:$imm), mn#"\t$imm, $cr"> {
+    bits<4> cr;
+    bits<32> imm;
+    let Inst{55-48} = 0xfd;
+    let Inst{47-40} = 0x73;
+    let Inst{39-32} = {op, cr};
+    let Inst{31-24} = imm{7-0};
+    let Inst{23-16} = imm{15-8};
+    let Inst{15-8} = imm{23-16};
+    let Inst{7-0} = imm{31-24};
+  }
 }
-def MVTC_i16 : RXInst40<(outs CTRL:$cr), (ins imms16:$imm),
-                        "mvtc\t$imm, $cr"> {
-  bits<4> cr;
-  bits<16> imm;
-  let Inst{39-32} = 0xfd;
-  let Inst{31-24} = 0x7b;
-  let Inst{23-16} = {0b0000, cr};
-  let Inst{15-8} = imm{7-0};
-  let Inst{7-0} = imm{15-8};
-}
-def MVTC_i24 : RXInst48<(outs CTRL:$cr), (ins imms24:$imm),
-                        "mvtc\t$imm, $cr"> {
-  bits<4> cr;
-  bits<24> imm;
-  let Inst{47-40} = 0xfd;
-  let Inst{39-32} = 0x7f;
-  let Inst{31-24} = {0b0000, cr};
-  let Inst{23-16} = imm{7-0};
-  let Inst{15-8} = imm{15-8};
-  let Inst{7-0} = imm{23-16};
-}
-def MVTC_i32 : RXInst56<(outs CTRL:$cr), (ins imm32:$imm),
-                        "mvtc\t$imm, $cr"> {
-  bits<4> cr;
-  bits<32> imm;
-  let Inst{55-48} = 0xfd;
-  let Inst{47-40} = 0x73;
-  let Inst{39-32} = {0b0000, cr};
-  let Inst{31-24} = imm{7-0};
-  let Inst{23-16} = imm{15-8};
-  let Inst{15-8} = imm{23-16};
-  let Inst{7-0} = imm{31-24};
-}
+defm MVTC : MvtcImm<0b0000, CTRL, "mvtc">;
 
 let Uses = [R0], Defs = [R0] in {
 // pushc cr: 0111 1110 110 cr / popc cr: 0111 1110 111 cr
@@ -970,6 +971,51 @@ def INT : RXInst24<(outs), (ins immu8:$imm), "int\t$imm"> {
   bits<8> imm;
   let Inst{23-8} = 0x7560;
   let Inst{7-0} = imm;
+}
+
+// RXv3e Protect Zone, interrupt priority levels 0-31 and INT Rs.
+let Predicates = [HasRXv3e] in {
+// mvtipl #imm: 0111 0101 0111 0000 000 imm[5]
+def MVTIPL5 : RXInst24<(outs), (ins immu5:$imm), "mvtipl\t$imm"> {
+  bits<5> imm;
+  let Inst{23-8} = 0x7570;
+  let Inst{7-5} = 0b000;
+  let Inst{4-0} = imm;
+}
+// int Rs: 1111 1101 0111 0101 0001 rs 0000 0000
+def INT_r : RXInst32<(outs), (ins GPR:$rs), "int\t$rs"> {
+  bits<4> rs;
+  let Inst{31-16} = 0xfd75;
+  let Inst{15-12} = 0x1;
+  let Inst{11-8} = rs;
+  let Inst{7-0} = 0x00;
+}
+// trcall #imm: 1111 1101 0111 0101 0000 0000 imm[8]
+def TRCALL : RXInst32<(outs), (ins immu8:$imm), "trcall\t$imm"> {
+  bits<8> imm;
+  let Inst{31-8} = 0xfd7500;
+  let Inst{7-0} = imm;
+}
+def TRRTE : RXInst2<0x7f97, "trrte">;
+// trmvtc Rs, cr: 1111 1101 0101 1000 rs cr
+def TRMVTC_r : RXInst24<(outs TRCTRL:$cr), (ins GPR:$rs),
+                        "trmvtc\t$rs, $cr"> {
+  bits<4> rs;
+  bits<4> cr;
+  let Inst{23-8} = 0xfd58;
+  let Inst{7-4} = rs;
+  let Inst{3-0} = cr;
+}
+// trmvfc cr, Rd: 1111 1101 0101 1010 cr rd
+def TRMVFC : RXInst24<(outs GPR:$rd), (ins TRCTRL:$cr),
+                      "trmvfc\t$cr, $rd"> {
+  bits<4> rd;
+  bits<4> cr;
+  let Inst{23-8} = 0xfd5a;
+  let Inst{7-4} = cr;
+  let Inst{3-0} = rd;
+}
+defm TRMVTC : MvtcImm<0b0010, TRCTRL, "trmvtc">;
 }
 
 // setpsw / clrpsw <flag>: 0111 1111 1010 flag / 0111 1111 1011 flag
