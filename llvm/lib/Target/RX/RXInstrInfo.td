@@ -2797,6 +2797,44 @@ def ST_W : RXPseudo<(outs), (ins GPR:$v, mem:$a),
 def : Pat<(i32 (extloadi8 AddrB:$a)), (LD_UB AddrB:$a)>;
 def : Pat<(i32 (extloadi16 AddrW:$a)), (LD_UW AddrW:$a)>;
 
+// Register-indexed accesses: [Ri, Rb] is Rb + Ri * size. Only for a sum of
+// two registers; a constant or a stack object as one side is a dsp[Rn]
+// access. AddedComplexity makes them win over a dsp[Rn] access with the
+// sum as its base.
+def addr_rr : PatFrag<(ops node:$a, node:$b), (add node:$a, node:$b), [{
+  for (SDValue Op : N->ops())
+    if (isa<ConstantSDNode>(Op) || isa<FrameIndexSDNode>(Op))
+      return false;
+  return true;
+}]>;
+def idxB : PatFrag<(ops node:$rb, node:$ri), (addr_rr node:$rb, node:$ri)>;
+def idxW : PatFrag<(ops node:$rb, node:$ri),
+                   (addr_rr node:$rb, (shl node:$ri, (i32 1)))>;
+def idxL : PatFrag<(ops node:$rb, node:$ri),
+                   (addr_rr node:$rb, (shl node:$ri, (i32 2)))>;
+
+let AddedComplexity = 10 in {
+def : Pat<(i32 (load (idxL GPR:$rb, GPR:$ri))), (MOV_L_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (sextloadi16 (idxW GPR:$rb, GPR:$ri))),
+          (MOV_W_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (zextloadi16 (idxW GPR:$rb, GPR:$ri))),
+          (MOVU_W_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (extloadi16 (idxW GPR:$rb, GPR:$ri))),
+          (MOVU_W_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (sextloadi8 (idxB GPR:$rb, GPR:$ri))),
+          (MOV_B_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (zextloadi8 (idxB GPR:$rb, GPR:$ri))),
+          (MOVU_B_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(i32 (extloadi8 (idxB GPR:$rb, GPR:$ri))),
+          (MOVU_B_ldx GPR:$ri, GPR:$rb)>;
+def : Pat<(store (i32 GPR:$v), (idxL GPR:$rb, GPR:$ri)),
+          (MOV_L_stx GPR:$v, GPR:$ri, GPR:$rb)>;
+def : Pat<(truncstorei16 (i32 GPR:$v), (idxW GPR:$rb, GPR:$ri)),
+          (MOV_W_stx GPR:$v, GPR:$ri, GPR:$rb)>;
+def : Pat<(truncstorei8 (i32 GPR:$v), (idxB GPR:$rb, GPR:$ri)),
+          (MOV_B_stx GPR:$v, GPR:$ri, GPR:$rb)>;
+}
+
 // Stores of a constant: mov.sz #imm, dsp[Rd]. .B always (its immediate is
 // one byte); .W / .L when the stored value fits 8 bits or the constant has
 // no other use (a constant stored several times is shorter loaded into a
