@@ -66,9 +66,11 @@ static unsigned getAccessScale(unsigned Opc) {
   case RX::LD_W:
   case RX::LD_UW:
   case RX::ST_W:
+  case RX::STI_W:
     return 2;
   case RX::LD_L:
   case RX::ST_L:
+  case RX::STI_L:
     return 4;
   default:
     return 1;

@@ -2797,6 +2797,31 @@ def ST_W : RXPseudo<(outs), (ins GPR:$v, mem:$a),
 def : Pat<(i32 (extloadi8 AddrB:$a)), (LD_UB AddrB:$a)>;
 def : Pat<(i32 (extloadi16 AddrW:$a)), (LD_UW AddrW:$a)>;
 
+// Stores of a constant: mov.sz #imm, dsp[Rd]. .B always (its immediate is
+// one byte); .W / .L when the stored value fits 8 bits or the constant has
+// no other use (a constant stored several times is shorter loaded into a
+// register once). RXMCInstLower picks the shortest encoding; Size is the
+// longest.
+def storeimm16 : PatLeaf<(i32 imm), [{
+  uint64_t V = N->getAsZExtVal() & 0xffff;
+  return N->hasOneUse() || V <= 255 || isInt<8>(int16_t(V));
+}]>;
+def storeimm32 : PatLeaf<(i32 imm), [{
+  int64_t V = cast<ConstantSDNode>(N)->getSExtValue();
+  return N->hasOneUse() || isInt<8>(V) || isUInt<8>(V);
+}]>;
+let mayStore = 1 in {
+let Size = 5 in
+def STI_B : RXPseudo<(outs), (ins mem:$a, i32imm:$imm),
+                     [(truncstorei8 (i32 imm:$imm), AddrB:$a)]>;
+let Size = 6 in
+def STI_W : RXPseudo<(outs), (ins mem:$a, i32imm:$imm),
+                     [(truncstorei16 (i32 storeimm16:$imm), AddrW:$a)]>;
+let Size = 8 in
+def STI_L : RXPseudo<(outs), (ins mem:$a, i32imm:$imm),
+                     [(store (i32 storeimm32:$imm), AddrL:$a)]>;
+}
+
 // Naturally aligned accesses of up to 32 bits are single instructions, so
 // atomic loads and stores are plain MOVs (RX parts are single-core). The
 // atomic memory operands keep later passes from caching or hoisting them.
