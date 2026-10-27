@@ -67,6 +67,9 @@ class RXAsmParser : public MCTargetAsmParser {
   // a size, set by parseInstruction for matchAndEmitInstruction.
   std::optional<unsigned> SizelessBranchKind;
 
+  StringMap<unsigned> OpcodesByName;
+  unsigned getZeroDspOpcode(unsigned Opc);
+
 #define GET_ASSEMBLER_HEADER
 #include "RXGenAsmMatcher.inc"
 
@@ -165,8 +168,9 @@ public:
   SMLoc getStartLoc() const override { return Start; }
   SMLoc getEndLoc() const override { return End; }
 
-  // Immediate classes (see RXInstrInfo.td). U4/U5/U8 compare the value as
-  // written, like rx_uintop in GNU as; the signed classes use 32-bit wrap.
+  // Immediate classes (see RXInstrInfo.td). U3/U4/U5/U8 compare the value
+  // as written, like rx_uintop in GNU as; the signed classes use 32-bit wrap.
+  bool isImmU3() const { return isHashImmInRange(0, 7); }
   bool isImmU4() const { return isHashImmInRange(0, 15); }
   bool isImmU5() const { return isHashImmInRange(0, 31); }
   bool isImmU8() const { return isHashImmInRange(0, 255); }
@@ -251,31 +255,23 @@ public:
 #include "RXGenAsmMatcher.inc"
 
 // "0[Rn]" that cannot use the dsp5 form (a register above R7) is the
-// displacement-less "[Rn]" form, as in GNU as. Returns the opcode without the
-// trailing displacement operand, or 0.
-static unsigned getZeroDspOpcode(unsigned Opc) {
-  switch (Opc) {
-  case RX::MOV_B_ld8: return RX::MOV_B_ld0;
-  case RX::MOV_W_ld8: return RX::MOV_W_ld0;
-  case RX::MOV_L_ld8: return RX::MOV_L_ld0;
-  case RX::MOV_B_st8: return RX::MOV_B_st0;
-  case RX::MOV_W_st8: return RX::MOV_W_st0;
-  case RX::MOV_L_st8: return RX::MOV_L_st0;
-  case RX::MOVU_B_ld8: return RX::MOVU_B_ld0;
-  case RX::MOVU_W_ld8: return RX::MOVU_W_ld0;
-  case RX::FSUB_m8: return RX::FSUB_m0;
-  case RX::FCMP_m8: return RX::FCMP_m0;
-  case RX::FADD_m8: return RX::FADD_m0;
-  case RX::FMUL_m8: return RX::FMUL_m0;
-  case RX::FDIV_m8: return RX::FDIV_m0;
-  case RX::FTOI_m8: return RX::FTOI_m0;
-  case RX::ROUND_m8: return RX::ROUND_m0;
-  case RX::FSQRT_m8: return RX::FSQRT_m0;
-  case RX::FTOU_m8: return RX::FTOU_m0;
-  case RX::DMOV_D_st8: return RX::DMOV_D_st0;
-  case RX::DMOV_D_ld8: return RX::DMOV_D_ld0;
-  default: return 0;
-  }
+// displacement-less "[Rn]" form, as in GNU as. The dsp:8 forms are named
+// ...8 and the forms without the displacement ...0 (MOV_B_ld8 / MOV_B_ld0,
+// ADD_mL_8 / ADD_mL_0, BSET_im8 / BSET_im0, ...). Returns the opcode without
+// the trailing displacement operand, or 0.
+unsigned RXAsmParser::getZeroDspOpcode(unsigned Opc) {
+  if (OpcodesByName.empty())
+    for (unsigned I = 0, E = MII.getNumOpcodes(); I != E; ++I)
+      OpcodesByName[MII.getName(I)] = I;
+  StringRef Name = MII.getName(Opc);
+  if (!Name.ends_with("8"))
+    return 0;
+  auto It = OpcodesByName.find((Name.drop_back() + "0").str());
+  if (It == OpcodesByName.end() ||
+      MII.get(It->second).getNumOperands() + 1 !=
+          MII.get(Opc).getNumOperands())
+    return 0;
+  return It->second;
 }
 
 // mov.sz #imm, dsp:8[Rd] / dsp:16[Rd], the form without displacement and
@@ -515,6 +511,19 @@ static bool takesLongMemoryOperand(StringRef Mnemonic) {
   return false;
 }
 
+// The instructions whose memory source takes a size extension (memex);
+// without one it is .L, as in GNU as.
+static bool takesMemex(StringRef Mnemonic) {
+  static const char *const Names[] = {
+      "sub", "cmp", "add",  "mul",  "and", "or",  "sbb",  "adc",
+      "max", "min", "emul", "emulu", "div", "divu", "tst", "xor",
+      "xchg", "itof", "utof"};
+  for (const char *N : Names)
+    if (Mnemonic.equals_insensitive(N))
+      return true;
+  return false;
+}
+
 // "[" Rn "]", "[" Rn "+" "]", "[" "-" Rn "]" or "[" Ri "," Rb "]"
 bool RXAsmParser::parseBracketedRegister(OperandVector &Operands) {
   SMLoc S = getLexer().getLoc();
@@ -543,11 +552,37 @@ bool RXAsmParser::parseBracketedRegister(OperandVector &Operands) {
   Operands.push_back(RXOperand::createToken("]", E));
   // The FPU instructions only take 32-bit memory operands; GNU as accepts an
   // optional ".L" after the bracket.
+  StringRef Mnemonic = static_cast<RXOperand &>(*Operands[0]).getToken();
   if (getLexer().is(AsmToken::Identifier) &&
       getLexer().getTok().getIdentifier().equals_insensitive(".l") &&
-      takesLongMemoryOperand(
-          static_cast<RXOperand &>(*Operands[0]).getToken()))
+      takesLongMemoryOperand(Mnemonic)) {
     getParser().Lex();
+    return false;
+  }
+  // A size extension (.b .w .l .ub .uw) is a token of its own; a memex
+  // source without one is .L.
+  if (getLexer().is(AsmToken::Identifier)) {
+    std::string Ext = getLexer().getTok().getIdentifier().lower();
+    static const char *const Exts[] = {".b", ".w", ".l", ".ub", ".uw"};
+    for (const char *X : Exts) {
+      if (Ext == X) {
+        Operands.push_back(RXOperand::createToken(X, getLexer().getLoc()));
+        getParser().Lex();
+        return false;
+      }
+    }
+  }
+  if (takesMemex(Mnemonic))
+    Operands.push_back(RXOperand::createToken(".l", E));
+  // The byte operand of the bit operations may go without the .B, as in the
+  // RXv3 manual's examples ("BSET #7, [R2]"). GNU as wants it for bset /
+  // bclr / btst #imm, mem.
+  else if (Mnemonic.starts_with_insensitive("bm") ||
+           Mnemonic.equals_insensitive("bnot") ||
+           Mnemonic.equals_insensitive("bset") ||
+           Mnemonic.equals_insensitive("bclr") ||
+           Mnemonic.equals_insensitive("btst"))
+    Operands.push_back(RXOperand::createToken(".b", E));
   return false;
 }
 

@@ -2207,7 +2207,7 @@ defm FTOU  : FPUConv<9, "ftou">;
 }
 
 // itof / utof Rs, Rd (integer to float). The memory forms take a memex size
-// and are not implemented.
+// (ITOF_m* / UTOF_m*, below with the other memex sources).
 def ITOF_rr : FPUrr<0x47, (outs GPR:$rd), (ins GPR:$rs), "itof\t$rs, $rd">;
 let Predicates = [HasRXv2] in
 def UTOF_rr : FPUrr<0x57, (outs GPR:$rd), (ins GPR:$rs), "utof\t$rs, $rd">;
@@ -3052,4 +3052,475 @@ def DCMP_P : RXPseudo<(outs),
                            GPR:$yhi),
                       [(RXdcmp timm:$cm, (i32 GPR:$xlo), (i32 GPR:$xhi),
                                (i32 GPR:$ylo), (i32 GPR:$yhi))]>;
+}
+
+//===----------------------------------------------------------------------===//
+// Memory operand forms: memex sources, push from memory, bit operations
+//
+// Each form here is: head bytes (with the ld field: 00 = [R], 01 = dsp:8[R],
+// 10 = dsp:16[R]), one byte of register / immediate fields (Mid), and the
+// displacement, little-endian and divided by the access size. The
+// multiclasses below make the three forms _0, _8 and _16 of an instruction
+// from its head for ld = 00 (Head) and the position of ld in it (LdShift);
+// Asm0 and AsmD are the assembly strings without and with the displacement.
+//===----------------------------------------------------------------------===//
+
+class MemF10<dag o, dag i, string a> : RXInst16<o, i, a> {
+  bits<8> Head;
+  bits<8> Mid;
+  let Inst{15-8} = Head;
+  let Inst{7-0} = Mid;
+}
+class MemF11<dag o, dag i, string a> : RXInst24<o, i, a> {
+  bits<8> Head;
+  bits<8> Mid;
+  bits<8> dsp;
+  let Inst{23-16} = Head;
+  let Inst{15-8} = Mid;
+  let Inst{7-0} = dsp;
+}
+class MemF12<dag o, dag i, string a> : RXInst32<o, i, a> {
+  bits<8> Head;
+  bits<8> Mid;
+  bits<16> dsp;
+  let Inst{31-24} = Head;
+  let Inst{23-16} = Mid;
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = dsp{15-8};
+}
+class MemF20<dag o, dag i, string a> : RXInst24<o, i, a> {
+  bits<16> Head;
+  bits<8> Mid;
+  let Inst{23-8} = Head;
+  let Inst{7-0} = Mid;
+}
+class MemF21<dag o, dag i, string a> : RXInst32<o, i, a> {
+  bits<16> Head;
+  bits<8> Mid;
+  bits<8> dsp;
+  let Inst{31-16} = Head;
+  let Inst{15-8} = Mid;
+  let Inst{7-0} = dsp;
+}
+class MemF22<dag o, dag i, string a> : RXInst40<o, i, a> {
+  bits<16> Head;
+  bits<8> Mid;
+  bits<16> dsp;
+  let Inst{39-24} = Head;
+  let Inst{23-16} = Mid;
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = dsp{15-8};
+}
+class MemF30<dag o, dag i, string a> : RXInst32<o, i, a> {
+  bits<24> Head;
+  bits<8> Mid;
+  let Inst{31-8} = Head;
+  let Inst{7-0} = Mid;
+}
+class MemF31<dag o, dag i, string a> : RXInst40<o, i, a> {
+  bits<24> Head;
+  bits<8> Mid;
+  bits<8> dsp;
+  let Inst{39-16} = Head;
+  let Inst{15-8} = Mid;
+  let Inst{7-0} = dsp;
+}
+class MemF32<dag o, dag i, string a> : RXInst48<o, i, a> {
+  bits<24> Head;
+  bits<8> Mid;
+  bits<16> dsp;
+  let Inst{47-24} = Head;
+  let Inst{23-16} = Mid;
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = dsp{15-8};
+}
+
+// Mid = rs rd, with a 1-, 2- or 3-byte head.
+multiclass MemRsRd1<int H, string Asm0, string AsmD, dag oops, dag iops,
+                    Operand d8, Operand d16> {
+  def _0 : MemF10<oops, iops, Asm0> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = H;
+    let Mid = {rs, rd};
+  }
+  def _8 : MemF11<oops, !con(iops, (ins d8:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 1);
+    let Mid = {rs, rd};
+  }
+  def _16 : MemF12<oops, !con(iops, (ins d16:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 2);
+    let Mid = {rs, rd};
+  }
+}
+multiclass MemRsRd2<int H, string Asm0, string AsmD, dag oops, dag iops,
+                    Operand d8, Operand d16> {
+  def _0 : MemF20<oops, iops, Asm0> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = H;
+    let Mid = {rs, rd};
+  }
+  def _8 : MemF21<oops, !con(iops, (ins d8:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 1);
+    let Mid = {rs, rd};
+  }
+  def _16 : MemF22<oops, !con(iops, (ins d16:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 2);
+    let Mid = {rs, rd};
+  }
+}
+// The ld field is in the middle byte of the head (06 mi 1000 ld op).
+multiclass MemRsRd3<int H, string Asm0, string AsmD, dag oops, dag iops,
+                    Operand d8, Operand d16> {
+  def _0 : MemF30<oops, iops, Asm0> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = H;
+    let Mid = {rs, rd};
+  }
+  def _8 : MemF31<oops, !con(iops, (ins d8:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 0x100);
+    let Mid = {rs, rd};
+  }
+  def _16 : MemF32<oops, !con(iops, (ins d16:$dsp)), AsmD> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(H, 0x200);
+    let Mid = {rs, rd};
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// op src, Rd with a memory source and a size extension (memex)
+//
+// memex is .B, .W, .L or .UW (06-prefixed forms with mi = 00, 01, 10, 11)
+// or .UB (a shorter encoding without the 06 prefix). GNU as and the parser
+// take "[Rs]" without a size extension as .L. The forms are named
+// <OP>_m<memex>_0 / _8 / _16.
+//===----------------------------------------------------------------------===//
+
+class RXMemex<string n, int mi, Operand d8, Operand d16> {
+  string Name = n;
+  int MI = mi;
+  Operand Dsp8 = d8;
+  Operand Dsp16 = d16;
+}
+def MX_B  : RXMemex<"b",  0b00, dsp8b, dsp16b>;
+def MX_W  : RXMemex<"w",  0b01, dsp8w, dsp16w>;
+def MX_L  : RXMemex<"l",  0b10, dsp8l, dsp16l>;
+def MX_UW : RXMemex<"uw", 0b11, dsp8w, dsp16w>;
+
+// sub / cmp / add / mul / and / or (op = 0..5): .UB is 0100 op ld rs rd,
+// the others 0000 0110 mi op ld rs rd.
+multiclass MemexA<int op, string mn, dag outs, dag rdin, string cons> {
+  let Constraints = cons, mayLoad = 1 in {
+  defm _mUB : MemRsRd1<!or(0x40, !shl(op, 2)), mn#"\t[$rs].ub, $rd",
+                       mn#"\t$dsp[$rs].ub, $rd", outs,
+                       !con(rdin, (ins GPR:$rs)), dsp8b, dsp16b>;
+  foreach M = [MX_B, MX_W, MX_L, MX_UW] in
+  defm _m#!toupper(M.Name)
+      : MemRsRd2<!or(0x0600, !shl(M.MI, 6), !shl(op, 2)),
+                 mn#"\t[$rs]."#M.Name#", $rd",
+                 mn#"\t$dsp[$rs]."#M.Name#", $rd", outs,
+                 !con(rdin, (ins GPR:$rs)), M.Dsp8, M.Dsp16>;
+  }
+}
+
+// The FC-prefixed operations (sub-operation op): .UB is 1111 1100 op ld
+// rs rd, the others 0000 0110 mi 10 00 ld op rs rd. adc and sbb have only
+// the .L form.
+multiclass MemexB<int op, string mn, dag outs, dag rdin, string cons,
+                  list<RXMemex> mxs = [MX_B, MX_W, MX_L, MX_UW],
+                  bit ub = 1> {
+  let Constraints = cons, mayLoad = 1 in {
+  if ub then
+  defm _mUB : MemRsRd2<!or(0xfc00, !shl(op, 2)), mn#"\t[$rs].ub, $rd",
+                       mn#"\t$dsp[$rs].ub, $rd", outs,
+                       !con(rdin, (ins GPR:$rs)), dsp8b, dsp16b>;
+  foreach M = mxs in
+  defm _m#!toupper(M.Name)
+      : MemRsRd3<!or(0x062000, !shl(M.MI, 14), op),
+                 mn#"\t[$rs]."#M.Name#", $rd",
+                 mn#"\t$dsp[$rs]."#M.Name#", $rd", outs,
+                 !con(rdin, (ins GPR:$rs)), M.Dsp8, M.Dsp16>;
+  }
+}
+
+let Defs = [PSW] in {
+defm SUB : MemexA<0, "sub", (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+defm CMP : MemexA<1, "cmp", (outs), (ins GPR:$rd), "">;
+defm ADD : MemexA<2, "add", (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+defm MUL : MemexA<3, "mul", (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+defm AND : MemexA<4, "and", (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+defm OR  : MemexA<5, "or",  (outs GPR:$rd), (ins GPR:$src), "$src = $rd">;
+
+let Uses = [PSW] in {
+defm SBB : MemexB<0x00, "sbb", (outs GPR:$rd), (ins GPR:$src), "$src = $rd",
+                  [MX_L], 0>;
+defm ADC : MemexB<0x02, "adc", (outs GPR:$rd), (ins GPR:$src), "$src = $rd",
+                  [MX_L], 0>;
+}
+defm MAX   : MemexB<0x04, "max", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm MIN   : MemexB<0x05, "min", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm EMUL  : MemexB<0x06, "emul", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm EMULU : MemexB<0x07, "emulu", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm DIV   : MemexB<0x08, "div", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm DIVU  : MemexB<0x09, "divu", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+defm TST   : MemexB<0x0c, "tst", (outs), (ins GPR:$rd), "">;
+defm XOR   : MemexB<0x0d, "xor", (outs GPR:$rd), (ins GPR:$src),
+                    "$src = $rd">;
+}
+
+// xchg: Rs (or the memory operand) and Rd swap.
+def XCHG_rr : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$src, GPR:$rs),
+                       "xchg\t$rs, $rd"> {
+  let Constraints = "$src = $rd, $rs = $rs_wb";
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfc;
+  let Inst{15-8} = 0x43;
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayStore = 1 in
+defm XCHG : MemexB<0x10, "xchg", (outs GPR:$rd), (ins GPR:$src),
+                   "$src = $rd">;
+
+// itof / utof src, Rd
+let Uses = [FPSW], Defs = [PSW, FPSW] in {
+defm ITOF : MemexB<0x11, "itof", (outs GPR:$rd), (ins), "">;
+let Predicates = [HasRXv2] in
+defm UTOF : MemexB<0x15, "utof", (outs GPR:$rd), (ins), "">;
+}
+
+//===----------------------------------------------------------------------===//
+// push.sz src with a memory source: 1111 01ld rs 10 sz [dsp]
+//===----------------------------------------------------------------------===//
+
+multiclass PushM<int sz, string sfx, Operand d8, Operand d16> {
+  defvar mn = "push."#sfx;
+  def _0 : MemF10<(outs), (ins GPR:$rs), mn#"\t[$rs]"> {
+    bits<4> rs;
+    let Head = 0xf4;
+    let Mid{7-4} = rs;
+    let Mid{3-0} = !or(8, sz);
+  }
+  def _8 : MemF11<(outs), (ins GPR:$rs, d8:$dsp), mn#"\t$dsp[$rs]"> {
+    bits<4> rs;
+    let Head = 0xf5;
+    let Mid{7-4} = rs;
+    let Mid{3-0} = !or(8, sz);
+  }
+  def _16 : MemF12<(outs), (ins GPR:$rs, d16:$dsp), mn#"\t$dsp[$rs]"> {
+    bits<4> rs;
+    let Head = 0xf6;
+    let Mid{7-4} = rs;
+    let Mid{3-0} = !or(8, sz);
+  }
+}
+let Uses = [R0], Defs = [R0], mayLoad = 1, mayStore = 1 in {
+defm PUSH_B_m : PushM<0b00, "b", dsp8b, dsp16b>;
+defm PUSH_W_m : PushM<0b01, "w", dsp8w, dsp16w>;
+defm PUSH_L_m : PushM<0b10, "l", dsp8l, dsp16l>;
+}
+
+//===----------------------------------------------------------------------===//
+// Bit operations
+//
+// The memory operand is a byte, written "[Rd].B" (GNU as requires the .B).
+// bset / bclr / btst #imm3, mem: 1111 0b ld rd c imm3 [dsp] (b = 1 for btst,
+// c = 1 for bclr). bset / bclr / btst / bnot Rs, mem / Rd: 1111 1100 0110
+// op ld rd rs [dsp] (ld = 11 for Rd). bnot / bm<cond> #imm3, mem: 1111 1100
+// 111 imm3 ld rd cond [dsp] (cond = 1111 for bnot). bset / bclr / btst
+// #imm5, Rd: 0111 1 op imm5 rd; bnot / bm<cond> #imm5, Rd: 1111 1101 111
+// imm5 cond rd.
+//===----------------------------------------------------------------------===//
+
+def ImmU3Class : RXImmClass<"ImmU3">;
+def immu3 : Operand<i32> { let ParserMatchClass = ImmU3Class; }
+
+multiclass BitImmMem<int b, int c, string mn, dag oops, dag iops> {
+  def _im0 : MemF10<oops, !con(iops, (ins immu3:$imm, GPR:$rd)),
+                    mn#"\t$imm, [$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head = !or(0xf0, !shl(b, 2));
+    let Mid{7-4} = rd;
+    let Mid{3} = c;
+    let Mid{2-0} = imm;
+  }
+  def _im8 : MemF11<oops, !con(iops, (ins immu3:$imm, GPR:$rd, dsp8b:$dsp)),
+                    mn#"\t$imm, $dsp[$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head = !or(0xf1, !shl(b, 2));
+    let Mid{7-4} = rd;
+    let Mid{3} = c;
+    let Mid{2-0} = imm;
+  }
+  def _im16 : MemF12<oops,
+                     !con(iops, (ins immu3:$imm, GPR:$rd, dsp16b:$dsp)),
+                     mn#"\t$imm, $dsp[$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head = !or(0xf2, !shl(b, 2));
+    let Mid{7-4} = rd;
+    let Mid{3} = c;
+    let Mid{2-0} = imm;
+  }
+}
+
+// bnot / bm<cond> #imm3, mem (the condition in the low nibble of Mid).
+multiclass BitCondMem<int cond, string mn> {
+  def _im0 : MemF20<(outs), (ins immu3:$imm, GPR:$rd), mn#"\t$imm, [$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head{15-5} = 0b11111100111;
+    let Head{4-2} = imm;
+    let Head{1-0} = 0b00;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+  def _im8 : MemF21<(outs), (ins immu3:$imm, GPR:$rd, dsp8b:$dsp),
+                    mn#"\t$imm, $dsp[$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head{15-5} = 0b11111100111;
+    let Head{4-2} = imm;
+    let Head{1-0} = 0b01;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+  def _im16 : MemF22<(outs), (ins immu3:$imm, GPR:$rd, dsp16b:$dsp),
+                     mn#"\t$imm, $dsp[$rd].b"> {
+    bits<4> rd;
+    bits<3> imm;
+    let Head{15-5} = 0b11111100111;
+    let Head{4-2} = imm;
+    let Head{1-0} = 0b10;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+}
+
+// bset / bclr / btst / bnot Rs, mem / Rd (op = 0..3)
+multiclass BitRegMem<int op, string mn, dag oops, dag rdin, string cons> {
+  def _rm0 : MemF20<(outs), (ins GPR:$rs, GPR:$rd), mn#"\t$rs, [$rd].b"> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(0xfc60, !shl(op, 2));
+    let Mid = {rd, rs};
+  }
+  def _rm8 : MemF21<(outs), (ins GPR:$rs, GPR:$rd, dsp8b:$dsp),
+                    mn#"\t$rs, $dsp[$rd].b"> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(0xfc61, !shl(op, 2));
+    let Mid = {rd, rs};
+  }
+  def _rm16 : MemF22<(outs), (ins GPR:$rs, GPR:$rd, dsp16b:$dsp),
+                     mn#"\t$rs, $dsp[$rd].b"> {
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(0xfc62, !shl(op, 2));
+    let Mid = {rd, rs};
+  }
+  def _rr : MemF20<oops, !con(rdin, (ins GPR:$rs)), mn#"\t$rs, $rd"> {
+    let Constraints = cons;
+    bits<4> rs;
+    bits<4> rd;
+    let Head = !or(0xfc63, !shl(op, 2));
+    let Mid = {rd, rs};
+  }
+}
+
+// bset / bclr / btst #imm5, Rd: 0111 1 op imm5 rd
+class BitImmReg<int op, string mn, dag oops, dag iops, string cons>
+    : RXInst16<oops, !con(iops, (ins immu5:$imm)), mn#"\t$imm, $rd"> {
+  let Constraints = cons;
+  bits<4> rd;
+  bits<5> imm;
+  let Inst{15-11} = 0b01111;
+  let Inst{10-9} = op;
+  let Inst{8-4} = imm;
+  let Inst{3-0} = rd;
+}
+
+// bnot / bm<cond> #imm5, Rd: 1111 1101 111 imm5 cond rd
+class BitCondReg<int cond, string mn, list<Register> uses>
+    : RXInst24<(outs GPR:$rd), (ins GPR:$src, immu5:$imm), mn#"\t$imm, $rd"> {
+  let Constraints = "$src = $rd";
+  let Uses = uses;
+  bits<4> rd;
+  bits<5> imm;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-13} = 0b111;
+  let Inst{12-8} = imm;
+  let Inst{7-4} = cond;
+  let Inst{3-0} = rd;
+}
+
+let mayLoad = 1, mayStore = 1 in {
+defm BSET : BitImmMem<0, 0, "bset", (outs), (ins)>;
+defm BCLR : BitImmMem<0, 1, "bclr", (outs), (ins)>;
+defm BNOT : BitCondMem<0xf, "bnot">;
+let Uses = [PSW] in
+foreach C = [CC_EQ, CC_NE, CC_GEU, CC_LTU, CC_GTU, CC_LEU, CC_PZ, CC_N,
+             CC_GE, CC_LT, CC_GT, CC_LE, CC_O, CC_NO] in
+defm BM#!toupper(C.Name) : BitCondMem<C.Value, "bm"#C.Name>;
+}
+let mayLoad = 1, Defs = [PSW] in
+defm BTST : BitImmMem<1, 0, "btst", (outs), (ins)>;
+
+let mayLoad = 1, mayStore = 1 in {
+defm BSET : BitRegMem<0, "bset", (outs GPR:$rd), (ins GPR:$src),
+                      "$src = $rd">;
+defm BCLR : BitRegMem<1, "bclr", (outs GPR:$rd), (ins GPR:$src),
+                      "$src = $rd">;
+defm BNOT : BitRegMem<3, "bnot", (outs GPR:$rd), (ins GPR:$src),
+                      "$src = $rd">;
+}
+let mayLoad = 1, Defs = [PSW] in
+defm BTST : BitRegMem<2, "btst", (outs), (ins GPR:$rd), "">;
+
+def BSET_ir : BitImmReg<0, "bset", (outs GPR:$rd), (ins GPR:$src),
+                        "$src = $rd">;
+def BCLR_ir : BitImmReg<1, "bclr", (outs GPR:$rd), (ins GPR:$src),
+                        "$src = $rd">;
+let Defs = [PSW] in
+def BTST_ir : BitImmReg<2, "btst", (outs), (ins GPR:$rd), "">;
+def BNOT_ir : BitCondReg<0xf, "bnot", []>;
+foreach C = [CC_EQ, CC_NE, CC_GEU, CC_LTU, CC_GTU, CC_LEU, CC_PZ, CC_N,
+             CC_GE, CC_LT, CC_GT, CC_LE, CC_O, CC_NO] in
+def BM#!toupper(C.Name)#_ir : BitCondReg<C.Value, "bm"#C.Name, [PSW]>;
+
+// Alternative condition names accepted by GNU as.
+foreach A = [["z", "BMEQ"], ["nz", "BMNE"], ["c", "BMGEU"], ["nc", "BMLTU"]] in {
+def : InstAlias<"bm"#A[0]#"\t$imm, $rd",
+                (!cast<Instruction>(A[1]#"_ir") GPR:$rd, immu5:$imm), 0>;
+def : InstAlias<"bm"#A[0]#"\t$imm, [$rd].b",
+                (!cast<Instruction>(A[1]#"_im0") immu3:$imm, GPR:$rd), 0>;
+def : InstAlias<"bm"#A[0]#"\t$imm, $dsp[$rd].b",
+                (!cast<Instruction>(A[1]#"_im8") immu3:$imm, GPR:$rd,
+                 dsp8b:$dsp), 0>;
+def : InstAlias<"bm"#A[0]#"\t$imm, $dsp[$rd].b",
+                (!cast<Instruction>(A[1]#"_im16") immu3:$imm, GPR:$rd,
+                 dsp16b:$dsp), 0>;
 }
