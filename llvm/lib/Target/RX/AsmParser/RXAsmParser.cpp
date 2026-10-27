@@ -9,6 +9,8 @@
 // Accepts GNU as (rx-elf) syntax:
 //   #imm          immediate
 //   dsp[Rn] [Rn]  register indirect with optional displacement (in bytes)
+//   [Rn+] [-Rn]   post-increment / pre-decrement
+//   [Ri, Rb]      register-indexed (Rb + Ri * size)
 //   Rlo-Rhi       register range (PUSHM/POPM/RTSD)
 //   label / expr  branch target
 //
@@ -164,6 +166,12 @@ public:
   }
   bool isImmS16() const { return isSignedImm(16); }
   bool isImmS24() const { return isSignedImm(24); }
+  bool isImmB8() const { return isHashImmInRange(-128, 255); }
+  bool isImmW16() const { return isHashImmInRange(-32768, 65535); }
+  bool isImmW8() const {
+    int64_t V;
+    return isImmW16() && getConstant(V) && isInt<8>(int16_t(V));
+  }
   bool isImmS32() const {
     int64_t V;
     if (Kind != k_Imm || !HasHash)
@@ -259,6 +267,104 @@ static unsigned getZeroDspOpcode(unsigned Opc) {
   }
 }
 
+// mov.sz #imm, dsp:8[Rd] / dsp:16[Rd], the form without displacement and
+// the dsp:5 form, by size and immediate field.
+struct MovImmMem {
+  unsigned D8, D16, D0, D5, Scale;
+};
+static const MovImmMem MovImmMems[] = {
+    {RX::MOV_B_mi8_b8, RX::MOV_B_mi16_b8, RX::MOV_B_mi0_b8, RX::MOV_B_mi5, 1},
+    {RX::MOV_W_mi8_w8, RX::MOV_W_mi16_w8, RX::MOV_W_mi0_w8, RX::MOV_W_mi5, 2},
+    {RX::MOV_W_mi8_w16, RX::MOV_W_mi16_w16, RX::MOV_W_mi0_w16, RX::MOV_W_mi5,
+     2},
+    {RX::MOV_L_mi8_s8, RX::MOV_L_mi16_s8, RX::MOV_L_mi0_s8, RX::MOV_L_mi5, 4},
+    {RX::MOV_L_mi8_s16, RX::MOV_L_mi16_s16, RX::MOV_L_mi0_s16, RX::MOV_L_mi5,
+     4},
+    {RX::MOV_L_mi8_s24, RX::MOV_L_mi16_s24, RX::MOV_L_mi0_s24, RX::MOV_L_mi5,
+     4},
+    {RX::MOV_L_mi8_i32, RX::MOV_L_mi16_i32, RX::MOV_L_mi0_i32, RX::MOV_L_mi5,
+     4},
+};
+
+// mov.sz #imm, dsp[Rd] (operands rd, dsp, imm): like GNU as, use the dsp:5
+// form when Rd is R0-R7, the displacement fits and #imm is 0-255, and the
+// form without displacement for 0.
+static void shortenMovImmMem(MCInst &Inst, const MCRegisterInfo *MRI) {
+  for (const MovImmMem &F : MovImmMems) {
+    bool IsD8 = Inst.getOpcode() == F.D8;
+    if (!IsD8 && Inst.getOpcode() != F.D16)
+      continue;
+    const MCOperand &Dsp = Inst.getOperand(1);
+    const MCOperand &Imm = Inst.getOperand(2);
+    if (!Dsp.isImm())
+      return;
+    bool SmallImm = Imm.isImm() && Imm.getImm() >= 0 && Imm.getImm() <= 255;
+    unsigned Opc = 0;
+    if (IsD8 && SmallImm &&
+        MRI->getEncodingValue(Inst.getOperand(0).getReg()) < 8 &&
+        Dsp.getImm() / F.Scale <= 31)
+      Opc = F.D5;
+    else if (Dsp.getImm() == 0)
+      Opc = F.D0;
+    if (!Opc)
+      return;
+    MCInst New;
+    New.setOpcode(Opc);
+    New.addOperand(Inst.getOperand(0));
+    if (Opc == F.D5)
+      New.addOperand(Dsp);
+    New.addOperand(Imm);
+    Inst = New;
+    return;
+  }
+}
+
+// mov.sz src, dest between memory, by size, source and destination
+// displacement (none, dsp:8, dsp:16).
+static const unsigned MovMemMem[3][3][3] = {
+    {{RX::MOV_B_mm0_0, RX::MOV_B_mm0_8, RX::MOV_B_mm0_16},
+     {RX::MOV_B_mm8_0, RX::MOV_B_mm8_8, RX::MOV_B_mm8_16},
+     {RX::MOV_B_mm16_0, RX::MOV_B_mm16_8, RX::MOV_B_mm16_16}},
+    {{RX::MOV_W_mm0_0, RX::MOV_W_mm0_8, RX::MOV_W_mm0_16},
+     {RX::MOV_W_mm8_0, RX::MOV_W_mm8_8, RX::MOV_W_mm8_16},
+     {RX::MOV_W_mm16_0, RX::MOV_W_mm16_8, RX::MOV_W_mm16_16}},
+    {{RX::MOV_L_mm0_0, RX::MOV_L_mm0_8, RX::MOV_L_mm0_16},
+     {RX::MOV_L_mm8_0, RX::MOV_L_mm8_8, RX::MOV_L_mm8_16},
+     {RX::MOV_L_mm16_0, RX::MOV_L_mm16_8, RX::MOV_L_mm16_16}},
+};
+
+// Operands rs, [sdsp], rd, [ddsp]: drop a zero displacement on either side,
+// as GNU as does.
+static void shortenMovMemMem(MCInst &Inst) {
+  for (unsigned Sz = 0; Sz != 3; ++Sz) {
+    for (unsigned S = 0; S != 3; ++S) {
+      for (unsigned D = 0; D != 3; ++D) {
+        if (Inst.getOpcode() != MovMemMem[Sz][S][D])
+          continue;
+        unsigned I = 0;
+        MCOperand Rs = Inst.getOperand(I++);
+        MCOperand SDsp = S ? Inst.getOperand(I++) : MCOperand();
+        MCOperand Rd = Inst.getOperand(I++);
+        MCOperand DDsp = D ? Inst.getOperand(I++) : MCOperand();
+        unsigned NS = S && SDsp.isImm() && SDsp.getImm() == 0 ? 0 : S;
+        unsigned ND = D && DDsp.isImm() && DDsp.getImm() == 0 ? 0 : D;
+        if (NS == S && ND == D)
+          return;
+        MCInst New;
+        New.setOpcode(MovMemMem[Sz][NS][ND]);
+        New.addOperand(Rs);
+        if (NS)
+          New.addOperand(SDsp);
+        New.addOperand(Rd);
+        if (ND)
+          New.addOperand(DDsp);
+        Inst = New;
+        return;
+      }
+    }
+  }
+}
+
 bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                           OperandVector &Operands,
                                           MCStreamer &Out, uint64_t &ErrorInfo,
@@ -282,6 +388,8 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     default:
       break;
     }
+    shortenMovImmMem(Inst, getContext().getRegisterInfo());
+    shortenMovMemMem(Inst);
     if (unsigned Opc = getZeroDspOpcode(Inst.getOpcode())) {
       const MCOperand &Dsp = Inst.getOperand(Inst.getNumOperands() - 1);
       if (Dsp.isImm() && Dsp.getImm() == 0) {
@@ -294,6 +402,7 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     }
     Inst.setLoc(IDLoc);
     Out.emitInstruction(Inst, getSTI());
+    noteRXInstruction(Out, Inst.getOpcode());
     return false;
   case Match_MissingFeature:
     return Error(IDLoc, "instruction requires a CPU feature not currently "
@@ -382,16 +491,28 @@ static bool takesLongMemoryOperand(StringRef Mnemonic) {
   return false;
 }
 
-// "[" Rn "]"
+// "[" Rn "]", "[" Rn "+" "]", "[" "-" Rn "]" or "[" Ri "," Rb "]"
 bool RXAsmParser::parseBracketedRegister(OperandVector &Operands) {
   SMLoc S = getLexer().getLoc();
   Operands.push_back(RXOperand::createToken("[", S));
   getParser().Lex(); // eat '['
+  if (getLexer().is(AsmToken::Minus)) {
+    Operands.push_back(RXOperand::createToken("-", getLexer().getLoc()));
+    getParser().Lex();
+  }
   MCRegister Reg;
   SMLoc RS, RE;
   if (parseRegister(Reg, RS, RE))
     return true;
   Operands.push_back(RXOperand::createReg(Reg, RS, RE));
+  if (getLexer().is(AsmToken::Plus)) {
+    Operands.push_back(RXOperand::createToken("+", getLexer().getLoc()));
+    getParser().Lex();
+  } else if (parseOptionalToken(AsmToken::Comma)) {
+    if (parseRegister(Reg, RS, RE))
+      return true;
+    Operands.push_back(RXOperand::createReg(Reg, RS, RE));
+  }
   SMLoc E = getLexer().getLoc();
   if (parseToken(AsmToken::RBrac, "expected ']'"))
     return true;

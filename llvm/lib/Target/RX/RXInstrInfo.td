@@ -40,6 +40,11 @@ def ImmU8Class    : RXImmClass<"ImmU8", [ImmS16Class]>;
 def ImmU4Class    : RXImmClass<"ImmU4", [ImmS8Class, ImmU8Class]>;
 def ImmU5Class    : RXImmClass<"ImmU5">;
 def RtsdImmClass  : RXImmClass<"RtsdImm">;
+// The immediates of mov.b / mov.w #imm, dsp[Rd]: .B takes -128..255 in its
+// 8-bit field, .W values are taken modulo 2^16 (8 bits where they fit).
+def ImmB8Class    : RXImmClass<"ImmB8">;
+def ImmW16Class   : RXImmClass<"ImmW16">;
+def ImmW8Class    : RXImmClass<"ImmW8", [ImmW16Class]>;
 
 def immu4   : Operand<i32> { let ParserMatchClass = ImmU4Class; }
 def immu5   : Operand<i32> { let ParserMatchClass = ImmU5Class; }
@@ -48,6 +53,9 @@ def imms8   : Operand<i32> { let ParserMatchClass = ImmS8Class; }
 def imms8n  : Operand<i32> { let ParserMatchClass = ImmS8NegClass; }
 def imms16  : Operand<i32> { let ParserMatchClass = ImmS16Class; }
 def imms24  : Operand<i32> { let ParserMatchClass = ImmS24Class; }
+def immb8   : Operand<i32> { let ParserMatchClass = ImmB8Class; }
+def immw8   : Operand<i32> { let ParserMatchClass = ImmW8Class; }
+def immw16  : Operand<i32> { let ParserMatchClass = ImmW16Class; }
 def imm32   : Operand<i32> {
   let ParserMatchClass = ImmS32Class;
   let EncoderMethod = "getImm32OpValue";
@@ -335,6 +343,910 @@ multiclass MovuSized<string sfx, bit s, Operand dsp5, Operand dsp8,
 
 defm MOVU_B : MovuSized<"b", 0, dsp5b, dsp8b, dsp16b>;
 defm MOVU_W : MovuSized<"w", 1, dsp5w, dsp8w, dsp16w>;
+
+//===----------------------------------------------------------------------===//
+// MOV / MOVU: pre-decrement / post-increment, register-indexed, immediate to
+// memory and memory to memory
+//===----------------------------------------------------------------------===//
+
+// mov.sz Rs, [Rd+] / [-Rd] and mov.sz / movu.sz [Rs+] / [-Rs], Rd: the
+// updated base register is an output tied to the input.
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_B_stpi : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.b\t$rs, [${rd}+]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 0, 0b00};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_B_stpd : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.b\t$rs, [-$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 1, 0b00};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_W_stpi : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.w\t$rs, [${rd}+]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 0, 0b01};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_W_stpd : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.w\t$rs, [-$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 1, 0b01};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_L_stpi : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.l\t$rs, [${rd}+]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 0, 0b10};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayStore = 1, Constraints = "$rd = $rd_wb" in
+def MOV_L_stpd : RXInst24<(outs GPR:$rd_wb), (ins GPR:$rs, GPR:$rd),
+                       "mov.l\t$rs, [-$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00100, 1, 0b10};
+  let Inst{7-4} = rd;
+  let Inst{3-0} = rs;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_B_ldpi : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.b\t[${rs}+], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 0, 0b00};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_B_ldpd : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.b\t[-$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 1, 0b00};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_W_ldpi : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.w\t[${rs}+], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 0, 0b01};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_W_ldpd : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.w\t[-$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 1, 0b01};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_L_ldpi : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.l\t[${rs}+], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 0, 0b10};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOV_L_ldpd : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "mov.l\t[-$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00101, 1, 0b10};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOVU_B_ldpi : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "movu.b\t[${rs}+], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00111, 0, {0, 0}};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOVU_B_ldpd : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "movu.b\t[-$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00111, 1, {0, 0}};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOVU_W_ldpi : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "movu.w\t[${rs}+], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00111, 0, {0, 1}};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, Constraints = "$rs = $rs_wb" in
+def MOVU_W_ldpd : RXInst24<(outs GPR:$rd, GPR:$rs_wb), (ins GPR:$rs),
+                       "movu.w\t[-$rs], $rd"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{23-16} = 0xfd;
+  let Inst{15-8} = {0b00111, 1, {0, 1}};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+
+// mov.sz [Ri, Rb], Rd / Rs, [Ri, Rb] and movu.sz [Ri, Rb], Rd: the address
+// is Rb + Ri * size.
+let mayLoad = 1 in
+def MOV_B_ldx : RXInst24<(outs GPR:$rd), (ins GPR:$ri, GPR:$rb),
+                        "mov.b\t[$ri, $rb], $rd"> {
+  bits<4> ri;
+  bits<4> rb;
+  bits<4> rd;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b01, 0b00, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rd;
+}
+let mayStore = 1 in
+def MOV_B_stx : RXInst24<(outs), (ins GPR:$rs, GPR:$ri, GPR:$rb),
+                        "mov.b\t$rs, [$ri, $rb]"> {
+  bits<4> rs;
+  bits<4> ri;
+  bits<4> rb;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b00, 0b00, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rs;
+}
+let mayLoad = 1 in
+def MOV_W_ldx : RXInst24<(outs GPR:$rd), (ins GPR:$ri, GPR:$rb),
+                        "mov.w\t[$ri, $rb], $rd"> {
+  bits<4> ri;
+  bits<4> rb;
+  bits<4> rd;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b01, 0b01, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rd;
+}
+let mayStore = 1 in
+def MOV_W_stx : RXInst24<(outs), (ins GPR:$rs, GPR:$ri, GPR:$rb),
+                        "mov.w\t$rs, [$ri, $rb]"> {
+  bits<4> rs;
+  bits<4> ri;
+  bits<4> rb;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b00, 0b01, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rs;
+}
+let mayLoad = 1 in
+def MOV_L_ldx : RXInst24<(outs GPR:$rd), (ins GPR:$ri, GPR:$rb),
+                        "mov.l\t[$ri, $rb], $rd"> {
+  bits<4> ri;
+  bits<4> rb;
+  bits<4> rd;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b01, 0b10, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rd;
+}
+let mayStore = 1 in
+def MOV_L_stx : RXInst24<(outs), (ins GPR:$rs, GPR:$ri, GPR:$rb),
+                        "mov.l\t$rs, [$ri, $rb]"> {
+  bits<4> rs;
+  bits<4> ri;
+  bits<4> rb;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b00, 0b10, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rs;
+}
+let mayLoad = 1 in
+def MOVU_B_ldx : RXInst24<(outs GPR:$rd), (ins GPR:$ri, GPR:$rb),
+                         "movu.b\t[$ri, $rb], $rd"> {
+  bits<4> ri;
+  bits<4> rb;
+  bits<4> rd;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b110, 0, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1 in
+def MOVU_W_ldx : RXInst24<(outs GPR:$rd), (ins GPR:$ri, GPR:$rb),
+                         "movu.w\t[$ri, $rb], $rd"> {
+  bits<4> ri;
+  bits<4> rb;
+  bits<4> rd;
+  let Inst{23-16} = 0xfe;
+  let Inst{15-8} = {0b110, 1, ri};
+  let Inst{7-4} = rb;
+  let Inst{3-0} = rd;
+}
+
+// mov.sz #imm, dsp:5[Rd] (Rd = R0-R7): #imm is 0-255 (as GNU as uses it).
+// The parser rewrites the dsp:8 forms to these where they fit.
+let mayStore = 1 in
+def MOV_B_mi5 : RXInst24<(outs), (ins GPRLow:$rd, dsp5b:$dsp, immu8:$imm),
+                        "mov.b\t$imm, $dsp[$rd]"> {
+  bits<3> rd;
+  bits<5> dsp;
+  bits<8> imm;
+  let Inst{23-16} = {0b001111, 0b00};
+  let Inst{15} = dsp{4};
+  let Inst{14-12} = rd;
+  let Inst{11-8} = dsp{3-0};
+  let Inst{7-0} = imm;
+}
+let mayStore = 1 in
+def MOV_W_mi5 : RXInst24<(outs), (ins GPRLow:$rd, dsp5w:$dsp, immu8:$imm),
+                        "mov.w\t$imm, $dsp[$rd]"> {
+  bits<3> rd;
+  bits<5> dsp;
+  bits<8> imm;
+  let Inst{23-16} = {0b001111, 0b01};
+  let Inst{15} = dsp{4};
+  let Inst{14-12} = rd;
+  let Inst{11-8} = dsp{3-0};
+  let Inst{7-0} = imm;
+}
+let mayStore = 1 in
+def MOV_L_mi5 : RXInst24<(outs), (ins GPRLow:$rd, dsp5l:$dsp, immu8:$imm),
+                        "mov.l\t$imm, $dsp[$rd]"> {
+  bits<3> rd;
+  bits<5> dsp;
+  bits<8> imm;
+  let Inst{23-16} = {0b001111, 0b10};
+  let Inst{15} = dsp{4};
+  let Inst{14-12} = rd;
+  let Inst{11-8} = dsp{3-0};
+  let Inst{7-0} = imm;
+}
+
+// mov.sz #imm, [Rd] / dsp:8[Rd] / dsp:16[Rd]: 1111 10 ld, rd li sz, the
+// displacement, then the immediate (li: 01 simm8, 10 simm16, 11 simm24,
+// 00 imm32; .B takes 8 bits, .W 8 or 16).
+let mayStore = 1 in
+def MOV_B_mi0_b8 : RXInst24<(outs), (ins GPR:$rd, immb8:$imm),
+                           "mov.b\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<8> imm;
+  let Inst{23-16} = {0b111110, 0b00};
+  let Inst{15-12} = rd;
+  let Inst{11-8} = {0b01, 0b00};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_B_mi8_b8 : RXInst32<(outs), (ins GPR:$rd, dsp8b:$dsp, immb8:$imm),
+                           "mov.b\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<8> imm;
+  let Inst{31-24} = {0b111110, 0b01};
+  let Inst{23-20} = rd;
+  let Inst{19-16} = {0b01, 0b00};
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_B_mi16_b8 : RXInst40<(outs), (ins GPR:$rd, dsp16b:$dsp, immb8:$imm),
+                           "mov.b\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<8> imm;
+  let Inst{39-32} = {0b111110, 0b10};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b01, 0b00};
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = dsp{15-8};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_W_mi0_w8 : RXInst24<(outs), (ins GPR:$rd, immw8:$imm),
+                           "mov.w\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<8> imm;
+  let Inst{23-16} = {0b111110, 0b00};
+  let Inst{15-12} = rd;
+  let Inst{11-8} = {0b01, 0b01};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_W_mi8_w8 : RXInst32<(outs), (ins GPR:$rd, dsp8w:$dsp, immw8:$imm),
+                           "mov.w\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<8> imm;
+  let Inst{31-24} = {0b111110, 0b01};
+  let Inst{23-20} = rd;
+  let Inst{19-16} = {0b01, 0b01};
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_W_mi16_w8 : RXInst40<(outs), (ins GPR:$rd, dsp16w:$dsp, immw8:$imm),
+                           "mov.w\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<8> imm;
+  let Inst{39-32} = {0b111110, 0b10};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b01, 0b01};
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = dsp{15-8};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_W_mi0_w16 : RXInst32<(outs), (ins GPR:$rd, immw16:$imm),
+                           "mov.w\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<16> imm;
+  let Inst{31-24} = {0b111110, 0b00};
+  let Inst{23-20} = rd;
+  let Inst{19-16} = {0b10, 0b01};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_W_mi8_w16 : RXInst40<(outs), (ins GPR:$rd, dsp8w:$dsp, immw16:$imm),
+                           "mov.w\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<16> imm;
+  let Inst{39-32} = {0b111110, 0b01};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b10, 0b01};
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_W_mi16_w16 : RXInst48<(outs), (ins GPR:$rd, dsp16w:$dsp, immw16:$imm),
+                           "mov.w\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<16> imm;
+  let Inst{47-40} = {0b111110, 0b10};
+  let Inst{39-36} = rd;
+  let Inst{35-32} = {0b10, 0b01};
+  let Inst{31-24} = dsp{7-0};
+  let Inst{23-16} = dsp{15-8};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_L_mi0_s8 : RXInst24<(outs), (ins GPR:$rd, imms8:$imm),
+                           "mov.l\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<8> imm;
+  let Inst{23-16} = {0b111110, 0b00};
+  let Inst{15-12} = rd;
+  let Inst{11-8} = {0b01, 0b10};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_L_mi8_s8 : RXInst32<(outs), (ins GPR:$rd, dsp8l:$dsp, imms8:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<8> imm;
+  let Inst{31-24} = {0b111110, 0b01};
+  let Inst{23-20} = rd;
+  let Inst{19-16} = {0b01, 0b10};
+  let Inst{15-8} = dsp{7-0};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_L_mi16_s8 : RXInst40<(outs), (ins GPR:$rd, dsp16l:$dsp, imms8:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<8> imm;
+  let Inst{39-32} = {0b111110, 0b10};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b01, 0b10};
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = dsp{15-8};
+  let Inst{7-0} = imm{7-0};
+}
+let mayStore = 1 in
+def MOV_L_mi0_s16 : RXInst32<(outs), (ins GPR:$rd, imms16:$imm),
+                           "mov.l\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<16> imm;
+  let Inst{31-24} = {0b111110, 0b00};
+  let Inst{23-20} = rd;
+  let Inst{19-16} = {0b10, 0b10};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_L_mi8_s16 : RXInst40<(outs), (ins GPR:$rd, dsp8l:$dsp, imms16:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<16> imm;
+  let Inst{39-32} = {0b111110, 0b01};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b10, 0b10};
+  let Inst{23-16} = dsp{7-0};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_L_mi16_s16 : RXInst48<(outs), (ins GPR:$rd, dsp16l:$dsp, imms16:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<16> imm;
+  let Inst{47-40} = {0b111110, 0b10};
+  let Inst{39-36} = rd;
+  let Inst{35-32} = {0b10, 0b10};
+  let Inst{31-24} = dsp{7-0};
+  let Inst{23-16} = dsp{15-8};
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+let mayStore = 1 in
+def MOV_L_mi0_s24 : RXInst40<(outs), (ins GPR:$rd, imms24:$imm),
+                           "mov.l\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<24> imm;
+  let Inst{39-32} = {0b111110, 0b00};
+  let Inst{31-28} = rd;
+  let Inst{27-24} = {0b11, 0b10};
+  let Inst{23-16} = imm{7-0};
+  let Inst{15-8} = imm{15-8};
+  let Inst{7-0} = imm{23-16};
+}
+let mayStore = 1 in
+def MOV_L_mi8_s24 : RXInst48<(outs), (ins GPR:$rd, dsp8l:$dsp, imms24:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<24> imm;
+  let Inst{47-40} = {0b111110, 0b01};
+  let Inst{39-36} = rd;
+  let Inst{35-32} = {0b11, 0b10};
+  let Inst{31-24} = dsp{7-0};
+  let Inst{23-16} = imm{7-0};
+  let Inst{15-8} = imm{15-8};
+  let Inst{7-0} = imm{23-16};
+}
+let mayStore = 1 in
+def MOV_L_mi16_s24 : RXInst56<(outs), (ins GPR:$rd, dsp16l:$dsp, imms24:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<24> imm;
+  let Inst{55-48} = {0b111110, 0b10};
+  let Inst{47-44} = rd;
+  let Inst{43-40} = {0b11, 0b10};
+  let Inst{39-32} = dsp{7-0};
+  let Inst{31-24} = dsp{15-8};
+  let Inst{23-16} = imm{7-0};
+  let Inst{15-8} = imm{15-8};
+  let Inst{7-0} = imm{23-16};
+}
+let mayStore = 1 in
+def MOV_L_mi0_i32 : RXInst48<(outs), (ins GPR:$rd, imm32:$imm),
+                           "mov.l\t$imm, [$rd]"> {
+  bits<4> rd;
+  bits<32> imm;
+  let Inst{47-40} = {0b111110, 0b00};
+  let Inst{39-36} = rd;
+  let Inst{35-32} = {0b00, 0b10};
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+let mayStore = 1 in
+def MOV_L_mi8_i32 : RXInst56<(outs), (ins GPR:$rd, dsp8l:$dsp, imm32:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<8> dsp;
+  bits<32> imm;
+  let Inst{55-48} = {0b111110, 0b01};
+  let Inst{47-44} = rd;
+  let Inst{43-40} = {0b00, 0b10};
+  let Inst{39-32} = dsp{7-0};
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+let mayStore = 1 in
+def MOV_L_mi16_i32 : RXInst64<(outs), (ins GPR:$rd, dsp16l:$dsp, imm32:$imm),
+                           "mov.l\t$imm, $dsp[$rd]"> {
+  bits<4> rd;
+  bits<16> dsp;
+  bits<32> imm;
+  let Inst{63-56} = {0b111110, 0b10};
+  let Inst{55-52} = rd;
+  let Inst{51-48} = {0b00, 0b10};
+  let Inst{47-40} = dsp{7-0};
+  let Inst{39-32} = dsp{15-8};
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+
+// mov.sz src, dest between memory: 11 sz ldd lds, rs rd, the source's
+// displacement, then the destination's.
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm0_0 : RXInst16<(outs), (ins GPR:$rs, GPR:$rd),
+                          "mov.b\t[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{15-8} = {0b11, 0b00, 0b00, 0b00};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm0_8 : RXInst24<(outs), (ins GPR:$rs, GPR:$rd, dsp8b:$ddsp),
+                          "mov.b\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> ddsp;
+  let Inst{23-16} = {0b11, 0b00, 0b01, 0b00};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm0_16 : RXInst32<(outs), (ins GPR:$rs, GPR:$rd, dsp16b:$ddsp),
+                          "mov.b\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> ddsp;
+  let Inst{31-24} = {0b11, 0b00, 0b10, 0b00};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm8_0 : RXInst24<(outs), (ins GPR:$rs, dsp8b:$sdsp, GPR:$rd),
+                          "mov.b\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  let Inst{23-16} = {0b11, 0b00, 0b00, 0b01};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = sdsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm8_8 : RXInst32<(outs), (ins GPR:$rs, dsp8b:$sdsp, GPR:$rd, dsp8b:$ddsp),
+                          "mov.b\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<8> ddsp;
+  let Inst{31-24} = {0b11, 0b00, 0b01, 0b01};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm8_16 : RXInst40<(outs), (ins GPR:$rs, dsp8b:$sdsp, GPR:$rd, dsp16b:$ddsp),
+                          "mov.b\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<16> ddsp;
+  let Inst{39-32} = {0b11, 0b00, 0b10, 0b01};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm16_0 : RXInst32<(outs), (ins GPR:$rs, dsp16b:$sdsp, GPR:$rd),
+                          "mov.b\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  let Inst{31-24} = {0b11, 0b00, 0b00, 0b10};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = sdsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm16_8 : RXInst40<(outs), (ins GPR:$rs, dsp16b:$sdsp, GPR:$rd, dsp8b:$ddsp),
+                          "mov.b\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<8> ddsp;
+  let Inst{39-32} = {0b11, 0b00, 0b01, 0b10};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = sdsp{15-8};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_B_mm16_16 : RXInst48<(outs), (ins GPR:$rs, dsp16b:$sdsp, GPR:$rd, dsp16b:$ddsp),
+                          "mov.b\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<16> ddsp;
+  let Inst{47-40} = {0b11, 0b00, 0b10, 0b10};
+  let Inst{39-36} = rs;
+  let Inst{35-32} = rd;
+  let Inst{31-24} = sdsp{7-0};
+  let Inst{23-16} = sdsp{15-8};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm0_0 : RXInst16<(outs), (ins GPR:$rs, GPR:$rd),
+                          "mov.w\t[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{15-8} = {0b11, 0b01, 0b00, 0b00};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm0_8 : RXInst24<(outs), (ins GPR:$rs, GPR:$rd, dsp8w:$ddsp),
+                          "mov.w\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> ddsp;
+  let Inst{23-16} = {0b11, 0b01, 0b01, 0b00};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm0_16 : RXInst32<(outs), (ins GPR:$rs, GPR:$rd, dsp16w:$ddsp),
+                          "mov.w\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> ddsp;
+  let Inst{31-24} = {0b11, 0b01, 0b10, 0b00};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm8_0 : RXInst24<(outs), (ins GPR:$rs, dsp8w:$sdsp, GPR:$rd),
+                          "mov.w\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  let Inst{23-16} = {0b11, 0b01, 0b00, 0b01};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = sdsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm8_8 : RXInst32<(outs), (ins GPR:$rs, dsp8w:$sdsp, GPR:$rd, dsp8w:$ddsp),
+                          "mov.w\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<8> ddsp;
+  let Inst{31-24} = {0b11, 0b01, 0b01, 0b01};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm8_16 : RXInst40<(outs), (ins GPR:$rs, dsp8w:$sdsp, GPR:$rd, dsp16w:$ddsp),
+                          "mov.w\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<16> ddsp;
+  let Inst{39-32} = {0b11, 0b01, 0b10, 0b01};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm16_0 : RXInst32<(outs), (ins GPR:$rs, dsp16w:$sdsp, GPR:$rd),
+                          "mov.w\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  let Inst{31-24} = {0b11, 0b01, 0b00, 0b10};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = sdsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm16_8 : RXInst40<(outs), (ins GPR:$rs, dsp16w:$sdsp, GPR:$rd, dsp8w:$ddsp),
+                          "mov.w\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<8> ddsp;
+  let Inst{39-32} = {0b11, 0b01, 0b01, 0b10};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = sdsp{15-8};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_W_mm16_16 : RXInst48<(outs), (ins GPR:$rs, dsp16w:$sdsp, GPR:$rd, dsp16w:$ddsp),
+                          "mov.w\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<16> ddsp;
+  let Inst{47-40} = {0b11, 0b01, 0b10, 0b10};
+  let Inst{39-36} = rs;
+  let Inst{35-32} = rd;
+  let Inst{31-24} = sdsp{7-0};
+  let Inst{23-16} = sdsp{15-8};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm0_0 : RXInst16<(outs), (ins GPR:$rs, GPR:$rd),
+                          "mov.l\t[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  let Inst{15-8} = {0b11, 0b10, 0b00, 0b00};
+  let Inst{7-4} = rs;
+  let Inst{3-0} = rd;
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm0_8 : RXInst24<(outs), (ins GPR:$rs, GPR:$rd, dsp8l:$ddsp),
+                          "mov.l\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> ddsp;
+  let Inst{23-16} = {0b11, 0b10, 0b01, 0b00};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm0_16 : RXInst32<(outs), (ins GPR:$rs, GPR:$rd, dsp16l:$ddsp),
+                          "mov.l\t[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> ddsp;
+  let Inst{31-24} = {0b11, 0b10, 0b10, 0b00};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm8_0 : RXInst24<(outs), (ins GPR:$rs, dsp8l:$sdsp, GPR:$rd),
+                          "mov.l\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  let Inst{23-16} = {0b11, 0b10, 0b00, 0b01};
+  let Inst{15-12} = rs;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = sdsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm8_8 : RXInst32<(outs), (ins GPR:$rs, dsp8l:$sdsp, GPR:$rd, dsp8l:$ddsp),
+                          "mov.l\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<8> ddsp;
+  let Inst{31-24} = {0b11, 0b10, 0b01, 0b01};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm8_16 : RXInst40<(outs), (ins GPR:$rs, dsp8l:$sdsp, GPR:$rd, dsp16l:$ddsp),
+                          "mov.l\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<8> sdsp;
+  bits<16> ddsp;
+  let Inst{39-32} = {0b11, 0b10, 0b10, 0b01};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm16_0 : RXInst32<(outs), (ins GPR:$rs, dsp16l:$sdsp, GPR:$rd),
+                          "mov.l\t$sdsp[$rs], [$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  let Inst{31-24} = {0b11, 0b10, 0b00, 0b10};
+  let Inst{23-20} = rs;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = sdsp{7-0};
+  let Inst{7-0} = sdsp{15-8};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm16_8 : RXInst40<(outs), (ins GPR:$rs, dsp16l:$sdsp, GPR:$rd, dsp8l:$ddsp),
+                          "mov.l\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<8> ddsp;
+  let Inst{39-32} = {0b11, 0b10, 0b01, 0b10};
+  let Inst{31-28} = rs;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = sdsp{7-0};
+  let Inst{15-8} = sdsp{15-8};
+  let Inst{7-0} = ddsp{7-0};
+}
+let mayLoad = 1, mayStore = 1 in
+def MOV_L_mm16_16 : RXInst48<(outs), (ins GPR:$rs, dsp16l:$sdsp, GPR:$rd, dsp16l:$ddsp),
+                          "mov.l\t$sdsp[$rs], $ddsp[$rd]"> {
+  bits<4> rs;
+  bits<4> rd;
+  bits<16> sdsp;
+  bits<16> ddsp;
+  let Inst{47-40} = {0b11, 0b10, 0b10, 0b10};
+  let Inst{39-36} = rs;
+  let Inst{35-32} = rd;
+  let Inst{31-24} = sdsp{7-0};
+  let Inst{23-16} = sdsp{15-8};
+  let Inst{15-8} = ddsp{7-0};
+  let Inst{7-0} = ddsp{15-8};
+}
 
 //===----------------------------------------------------------------------===//
 // Arithmetic / logic
@@ -1029,6 +1941,35 @@ foreach F = [RXFlag<"c", 0>, RXFlag<"z", 1>, RXFlag<"s", 2>, RXFlag<"o", 3>,
 }
 
 def SATR : RXInst2<0x7f93, "satr">;
+
+// String instructions: R1 = destination, R2 = source, R3 = count.
+let mayLoad = 1, mayStore = 1, Uses = [R1, R2, R3], Defs = [R1, R2, R3] in {
+def SMOVF : RXInst2<0x7f8f, "smovf">;
+def SMOVB : RXInst2<0x7f8b, "smovb">;
+def SMOVU : RXInst2<0x7f87, "smovu">;
+}
+let mayLoad = 1, Uses = [R1, R2, R3], Defs = [R1, R2, R3, PSW] in
+def SCMPU : RXInst2<0x7f83, "scmpu">;
+let mayStore = 1, Uses = [R1, R2, R3], Defs = [R1, R3] in {
+def SSTR_B : RXInst2<0x7f88, "sstr.b">;
+def SSTR_W : RXInst2<0x7f89, "sstr.w">;
+def SSTR_L : RXInst2<0x7f8a, "sstr.l">;
+}
+let mayLoad = 1, Uses = [R1, R2, R3], Defs = [R1, R2, R3, PSW] in {
+def SUNTIL_B : RXInst2<0x7f80, "suntil.b">;
+def SUNTIL_W : RXInst2<0x7f81, "suntil.w">;
+def SUNTIL_L : RXInst2<0x7f82, "suntil.l">;
+def SWHILE_B : RXInst2<0x7f84, "swhile.b">;
+def SWHILE_W : RXInst2<0x7f85, "swhile.w">;
+def SWHILE_L : RXInst2<0x7f86, "swhile.l">;
+}
+// rmpa: R6:R5:R4 += sum of [R1] * [R2] over R3 elements; also changes ACC0.
+let mayLoad = 1, Uses = [R1, R2, R3, R4, R5, R6],
+    Defs = [R1, R2, R3, R4, R5, R6, ACC0, PSW] in {
+def RMPA_B : RXInst2<0x7f8c, "rmpa.b">;
+def RMPA_W : RXInst2<0x7f8d, "rmpa.w">;
+def RMPA_L : RXInst2<0x7f8e, "rmpa.l">;
+}
 def RTFI : RXInst2<0x7f94, "rtfi">;
 def RTE  : RXInst2<0x7f95, "rte">;
 def WAIT : RXInst2<0x7f96, "wait">;
