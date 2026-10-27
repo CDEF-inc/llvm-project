@@ -42,6 +42,8 @@ private:
 #include "RXGenDAGISel.inc"
 
   void Select(SDNode *N) override;
+  bool selectIndexedLoad(LoadSDNode *LD);
+  bool selectIndexedStore(StoreSDNode *ST);
 
   bool selectAddr(SDValue Addr, SDValue &Base, SDValue &Disp, unsigned Scale);
   bool SelectAddrB(SDValue Addr, SDValue &Base, SDValue &Disp) {
@@ -98,11 +100,97 @@ bool RXDAGToDAGISel::selectAddr(SDValue Addr, SDValue &Base, SDValue &Disp,
   return true;
 }
 
+// The size of an [Rn+] / [-Rn] access and whether it moves up; false if the
+// offset is not the access size.
+static bool getIndexedMode(ISD::MemIndexedMode AM, SDValue Offset,
+                           unsigned Size, bool &Inc) {
+  auto *C = dyn_cast<ConstantSDNode>(Offset);
+  if (!C || C->getZExtValue() != Size)
+    return false;
+  if (AM == ISD::POST_INC)
+    Inc = true;
+  else if (AM == ISD::PRE_DEC)
+    Inc = false;
+  else
+    return false;
+  return true;
+}
+
+// mov.sz / movu.sz [Rs+] / [-Rs], Rd: results Rd, the new Rs and the chain,
+// as those of the indexed load.
+bool RXDAGToDAGISel::selectIndexedLoad(LoadSDNode *LD) {
+  unsigned Size = LD->getMemoryVT().getStoreSize();
+  bool Inc;
+  if (LD->getValueType(0) != MVT::i32 ||
+      !getIndexedMode(LD->getAddressingMode(), LD->getOffset(), Size, Inc))
+    return false;
+  bool Sext = LD->getExtensionType() == ISD::SEXTLOAD;
+  unsigned Opc;
+  switch (Size) {
+  case 1:
+    Opc = Sext ? (Inc ? RX::MOV_B_ldpi : RX::MOV_B_ldpd)
+               : (Inc ? RX::MOVU_B_ldpi : RX::MOVU_B_ldpd);
+    break;
+  case 2:
+    Opc = Sext ? (Inc ? RX::MOV_W_ldpi : RX::MOV_W_ldpd)
+               : (Inc ? RX::MOVU_W_ldpi : RX::MOVU_W_ldpd);
+    break;
+  case 4:
+    Opc = Inc ? RX::MOV_L_ldpi : RX::MOV_L_ldpd;
+    break;
+  default:
+    return false;
+  }
+  MachineSDNode *MN = CurDAG->getMachineNode(
+      Opc, SDLoc(LD), MVT::i32, MVT::i32, MVT::Other,
+      {LD->getBasePtr(), LD->getChain()});
+  CurDAG->setNodeMemRefs(MN, {LD->getMemOperand()});
+  ReplaceNode(LD, MN);
+  return true;
+}
+
+// mov.sz Rs, [Rd+] / [-Rd]: results the new Rd and the chain, as those of
+// the indexed store.
+bool RXDAGToDAGISel::selectIndexedStore(StoreSDNode *ST) {
+  unsigned Size = ST->getMemoryVT().getStoreSize();
+  bool Inc;
+  if (ST->getValue().getValueType() != MVT::i32 ||
+      !getIndexedMode(ST->getAddressingMode(), ST->getOffset(), Size, Inc))
+    return false;
+  unsigned Opc;
+  switch (Size) {
+  case 1:
+    Opc = Inc ? RX::MOV_B_stpi : RX::MOV_B_stpd;
+    break;
+  case 2:
+    Opc = Inc ? RX::MOV_W_stpi : RX::MOV_W_stpd;
+    break;
+  case 4:
+    Opc = Inc ? RX::MOV_L_stpi : RX::MOV_L_stpd;
+    break;
+  default:
+    return false;
+  }
+  MachineSDNode *MN = CurDAG->getMachineNode(
+      Opc, SDLoc(ST), MVT::i32, MVT::Other,
+      {ST->getValue(), ST->getBasePtr(), ST->getChain()});
+  CurDAG->setNodeMemRefs(MN, {ST->getMemOperand()});
+  ReplaceNode(ST, MN);
+  return true;
+}
+
 void RXDAGToDAGISel::Select(SDNode *Node) {
   if (Node->isMachineOpcode()) {
     Node->setNodeId(-1);
     return;
   }
+
+  if (auto *LD = dyn_cast<LoadSDNode>(Node))
+    if (LD->isIndexed() && selectIndexedLoad(LD))
+      return;
+  if (auto *ST = dyn_cast<StoreSDNode>(Node))
+    if (ST->isIndexed() && selectIndexedStore(ST))
+      return;
 
   SDLoc DL(Node);
   if (Node->getOpcode() == ISD::FrameIndex) {

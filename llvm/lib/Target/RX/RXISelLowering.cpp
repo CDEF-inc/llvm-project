@@ -36,6 +36,14 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
     addRegisterClass(MVT::f32, &RX::GPRRegClass);
   computeRegisterProperties(STI.getRegisterInfo());
 
+  // mov.sz Rs, [Rd+] / [-Rd] and mov.sz / movu.sz [Rs+] / [-Rs], Rd.
+  for (MVT VT : {MVT::i8, MVT::i16, MVT::i32}) {
+    for (ISD::MemIndexedMode AM : {ISD::POST_INC, ISD::PRE_DEC}) {
+      setIndexedLoadAction(AM, VT, Legal);
+      setIndexedStoreAction(AM, VT, Legal);
+    }
+  }
+
   setStackPointerRegisterToSaveRestore(RX::R0);
   setBooleanContents(ZeroOrOneBooleanContent);
   setSchedulingPreference(Sched::RegPressure);
@@ -790,6 +798,70 @@ RXTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
 //===----------------------------------------------------------------------===//
 // Inline assembly
 //===----------------------------------------------------------------------===//
+
+// The access of an indexed load / store: its base pointer and its size, if
+// it is one of [Rn+] / [-Rn] (8, 16 or 32 bits).
+static bool getIndexedAccess(SDNode *N, SDValue &Ptr, unsigned &Size) {
+  EVT VT;
+  if (auto *LD = dyn_cast<LoadSDNode>(N)) {
+    Ptr = LD->getBasePtr();
+    VT = LD->getMemoryVT();
+  } else if (auto *ST = dyn_cast<StoreSDNode>(N)) {
+    Ptr = ST->getBasePtr();
+    VT = ST->getMemoryVT();
+  } else {
+    return false;
+  }
+  if (VT != MVT::i8 && VT != MVT::i16 && VT != MVT::i32)
+    return false;
+  Size = VT.getStoreSize();
+  return true;
+}
+
+// [-Rn]: the access is at Rn - size, which becomes the new Rn.
+bool RXTargetLowering::getPreIndexedAddressParts(SDNode *N, SDValue &Base,
+                                                 SDValue &Offset,
+                                                 ISD::MemIndexedMode &AM,
+                                                 SelectionDAG &DAG) const {
+  SDValue Ptr;
+  unsigned Size;
+  if (!getIndexedAccess(N, Ptr, Size))
+    return false;
+  int64_t Delta;
+  if (Ptr.getOpcode() == ISD::ADD && isa<ConstantSDNode>(Ptr.getOperand(1)))
+    Delta = Ptr.getConstantOperandVal(1);
+  else if (Ptr.getOpcode() == ISD::SUB &&
+           isa<ConstantSDNode>(Ptr.getOperand(1)))
+    Delta = -int64_t(Ptr.getConstantOperandVal(1));
+  else
+    return false;
+  if (SignExtend64<32>(Delta) != -int64_t(Size))
+    return false;
+  Base = Ptr.getOperand(0);
+  Offset = DAG.getConstant(Size, SDLoc(N), MVT::i32);
+  AM = ISD::PRE_DEC;
+  return true;
+}
+
+// [Rn+]: the access is at Rn, which then moves up by the size.
+bool RXTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
+                                                  SDValue &Base,
+                                                  SDValue &Offset,
+                                                  ISD::MemIndexedMode &AM,
+                                                  SelectionDAG &DAG) const {
+  SDValue Ptr;
+  unsigned Size;
+  if (!getIndexedAccess(N, Ptr, Size) || Op->getOpcode() != ISD::ADD ||
+      Op->getOperand(0) != Ptr)
+    return false;
+  auto *C = dyn_cast<ConstantSDNode>(Op->getOperand(1));
+  if (!C || C->getSExtValue() != Size)
+    return false;
+  Base = Ptr;
+  Offset = Op->getOperand(1);
+  AM = ISD::POST_INC;
+  return true;
+}
 
 TargetLowering::ConstraintType
 RXTargetLowering::getConstraintType(StringRef Constraint) const {
