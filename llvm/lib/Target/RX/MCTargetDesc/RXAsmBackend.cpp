@@ -8,6 +8,7 @@
 
 #include "MCTargetDesc/RXFixupKinds.h"
 #include "MCTargetDesc/RXMCTargetDesc.h"
+#include "MCTargetDesc/RXSizelessBranch.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAssembler.h"
@@ -53,6 +54,24 @@ public:
                   const MCValue &Target, uint8_t *Data, uint64_t Value,
                   bool IsResolved) override;
 
+  // Branches written without a size (BR_SIZELESS) step through their forms
+  // until the target is in range (see RXSizelessBranch.h).
+  bool mayNeedRelaxation(unsigned Opcode, ArrayRef<MCOperand> Operands,
+                         const MCSubtargetInfo &STI) const override {
+    return Opcode == RX::BR_SIZELESS &&
+           Operands[2].getImm() + 1 <
+               int64_t(RX::getSizelessBranchForms(Operands[1].getImm()).size());
+  }
+
+  bool fixupNeedsRelaxationAdvanced(const MCFragment &F, const MCFixup &Fixup,
+                                    const MCValue &Target, uint64_t Value,
+                                    bool Resolved) const override;
+
+  void relaxInstruction(MCInst &Inst,
+                        const MCSubtargetInfo &STI) const override {
+    Inst.getOperand(2).setImm(Inst.getOperand(2).getImm() + 1);
+  }
+
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override {
     // NOP is the single byte 0x03.
@@ -64,9 +83,60 @@ public:
 
 } // end anonymous namespace
 
+bool RXAsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &F,
+                                                const MCFixup &Fixup,
+                                                const MCValue &Target,
+                                                uint64_t Value,
+                                                bool Resolved) const {
+  ArrayRef<MCOperand> Ops = F.getOperands();
+  unsigned Kind = Ops[1].getImm(), Step = Ops[2].getImm();
+  // GNU as gives a target it cannot resolve a fixed form.
+  if (!Resolved)
+    return Step < RX::getSizelessBranchUnresolvedStep(Kind);
+  // Value is relative to the fixup. Like GNU as, measure the distance from
+  // the start of the whole sequence: for a single branch that is the
+  // branch itself, for b<!cond> + bra.w the b<!cond> (so a bra.w that would
+  // just reach becomes a bra.a, as in GNU as).
+  int64_t Dsp = static_cast<int64_t>(Value) + Fixup.getOffset();
+  switch (Fixup.getKind()) {
+  case RX::fixup_rx_pcrel3:
+    return Dsp < 3 || Dsp > 10;
+  case RX::fixup_rx_pcrel8:
+    return !isInt<8>(Dsp);
+  case RX::fixup_rx_pcrel16:
+    return !isInt<16>(Dsp);
+  default:
+    return false;
+  }
+}
+
 void RXAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                               const MCValue &Target, uint8_t *Data,
                               uint64_t Value, bool IsResolved) {
+  // A - B + C with B not resolvable here: like GNU as, the stack relocations
+  // R_RX_SYM A+C, R_RX_SYM B, R_RX_OPsub and R_RX_ABS32 (the field stays
+  // zero). Instructions take such a value as a 32-bit immediate.
+  if (!IsResolved && Target.getSubSym()) {
+    if (Fixup.getKind() != FK_Data_4) {
+      getContext().reportError(Fixup.getLoc(),
+                               "a difference of symbols needs a 32-bit field");
+      return;
+    }
+    MCValue A =
+        MCValue::get(Target.getAddSym(), nullptr, Target.getConstant());
+    MCValue B = MCValue::get(Target.getSubSym());
+    auto Record = [&](unsigned Type, const MCValue &V) {
+      MCFixup R = MCFixup::create(Fixup.getOffset(), nullptr,
+                                  FirstLiteralRelocationKind + Type);
+      uint64_t FixedValue = 0;
+      Asm->getWriter().recordRelocation(F, R, V, FixedValue);
+    };
+    Record(ELF::R_RX_SYM, A);
+    Record(ELF::R_RX_SYM, B);
+    Record(ELF::R_RX_OPsub, B);
+    Record(ELF::R_RX_ABS32, B);
+    return;
+  }
   maybeAddReloc(F, Fixup, Target, Value, IsResolved);
   // Unresolved fields stay zero; the RELA addend carries the value.
   if (!IsResolved)

@@ -2733,6 +2733,14 @@ let isBranch = 1, isTerminator = 1, Uses = [PSW], Size = 2 in
 def BCC : RXPseudo<(outs), (ins brtarget8:$dst, i32imm:$cc),
                    [(RXbrcc bb:$dst, imm:$cc)]>;
 
+// "bra label", "bsr label" and "b<cond> label" without a size (GNU as
+// syntax): the assembler picks the form from the distance. $kind is 0 for
+// bra, 1 for bsr and 2 + cond for b<cond>; $step selects the form (see
+// MCTargetDesc/RXSizelessBranch.h). Only made by the assembly parser.
+let isBranch = 1, Size = 6 in
+def BR_SIZELESS : RXPseudo<(outs), (ins brtarget8:$dst, i32imm:$kind,
+                                        i32imm:$step)>;
+
 // sc<cond>.l with the condition as an operand.
 let Uses = [PSW], Size = 3 in
 def SCC : RXPseudo<(outs GPR:$rd), (ins i32imm:$cc),

@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "RXInstPrinter.h"
+#include "MCTargetDesc/RXMCTargetDesc.h"
+#include "MCTargetDesc/RXSizelessBranch.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -30,6 +32,24 @@ void RXInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) {
 void RXInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                               StringRef Annot, const MCSubtargetInfo &STI,
                               raw_ostream &O) {
+  if (MI->getOpcode() == RX::BR_SIZELESS) {
+    // Printed as written, without a size; the assembler picks one again.
+    static const char *const Conds[] = {"eq", "ne", "geu", "ltu", "gtu",
+                                        "leu", "pz", "n",  "ge",  "lt",
+                                        "gt", "le", "o",  "no"};
+    unsigned Kind = MI->getOperand(1).getImm();
+    O << '\t';
+    if (Kind == RX::BrKindBra)
+      O << "bra";
+    else if (Kind == RX::BrKindBsr)
+      O << "bsr";
+    else
+      O << 'b' << Conds[Kind - RX::BrKindCond];
+    O << '\t';
+    printPCRel(MI, 0, O);
+    printAnnotation(O, Annot);
+    return;
+  }
   printInstruction(MI, Address, O);
   printAnnotation(O, Annot);
 }
