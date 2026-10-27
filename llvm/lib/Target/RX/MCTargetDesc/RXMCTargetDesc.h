@@ -32,6 +32,10 @@ class Target;
 MCTargetStreamer *createRXObjectTargetStreamer(MCStreamer &S,
                                                const MCSubtargetInfo &STI);
 
+// Call for every instruction emitted to S: an object that uses the string
+// instructions (smovf, sstr, ...) is marked in e_flags, as GNU as does.
+void noteRXInstruction(MCStreamer &S, unsigned Opcode);
+
 MCCodeEmitter *createRXMCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx);
 MCAsmBackend *createRXMCAsmBackend(const Target &T, const MCSubtargetInfo &STI,
                                    const MCRegisterInfo &MRI,

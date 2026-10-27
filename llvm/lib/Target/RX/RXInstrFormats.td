@@ -56,3 +56,8 @@ class RXInst56<dag outs, dag ins, string asmstr, list<dag> pattern = []>
     : RXInst<7, outs, ins, asmstr, pattern> {
   field bits<56> Inst;
 }
+
+class RXInst64<dag outs, dag ins, string asmstr, list<dag> pattern = []>
+    : RXInst<8, outs, ins, asmstr, pattern> {
+  field bits<64> Inst;
+}
