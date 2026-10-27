@@ -12,11 +12,13 @@
 
 #include "MCTargetDesc/RXFixupKinds.h"
 #include "MCTargetDesc/RXMCTargetDesc.h"
+#include "MCTargetDesc/RXSizelessBranch.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
@@ -100,10 +102,77 @@ public:
                          const MCSubtargetInfo &STI) const override;
 };
 
+// The instructions a BR_SIZELESS (target, kind, step) stands for.
+static void expandSizelessBranch(const MCInst &MI,
+                                 SmallVectorImpl<MCInst> &Out) {
+  static const unsigned CondB[] = {
+      RX::BEQ_B, RX::BNE_B, RX::BGEU_B, RX::BLTU_B, RX::BGTU_B,
+      RX::BLEU_B, RX::BPZ_B, RX::BN_B, RX::BGE_B, RX::BLT_B,
+      RX::BGT_B, RX::BLE_B, RX::BO_B, RX::BNO_B};
+  const MCOperand &Dst = MI.getOperand(0);
+  unsigned Kind = MI.getOperand(1).getImm();
+  RX::SizelessBranchForm Form =
+      RX::getSizelessBranchForms(Kind)[MI.getOperand(2).getImm()];
+  auto Add = [&](unsigned Opc, const MCOperand &Op) {
+    Out.push_back(MCInstBuilder(Opc).addOperand(Op));
+  };
+  if (Kind == RX::BrKindBra) {
+    static const unsigned Bra[] = {RX::BRA_S, RX::BRA_B, RX::BRA_W, RX::BRA_A};
+    Add(Bra[Form], Dst);
+    return;
+  }
+  if (Kind == RX::BrKindBsr) {
+    Add(Form == RX::BrFormW ? RX::BSR_W : RX::BSR_A, Dst);
+    return;
+  }
+  // The inverted condition is the other one of its pair (eq / ne, ...).
+  unsigned Cond = Kind - RX::BrKindCond, Inv = Cond ^ 1;
+  switch (Form) {
+  case RX::BrFormS:
+    Add(Cond == 0 ? RX::BEQ_S : RX::BNE_S, Dst);
+    return;
+  case RX::BrFormB:
+    Add(CondB[Cond], Dst);
+    return;
+  case RX::BrFormW:
+    Add(Cond == 0 ? RX::BEQ_W : RX::BNE_W, Dst);
+    return;
+  case RX::BrFormInvSA:
+    Add(Inv == 0 ? RX::BEQ_S : RX::BNE_S, MCOperand::createImm(5));
+    Add(RX::BRA_A, Dst);
+    return;
+  case RX::BrFormInvBW:
+    Add(CondB[Inv], MCOperand::createImm(5));
+    Add(RX::BRA_W, Dst);
+    return;
+  case RX::BrFormInvBA:
+    Add(CondB[Inv], MCOperand::createImm(6));
+    Add(RX::BRA_A, Dst);
+    return;
+  default:
+    llvm_unreachable("no such form for a conditional branch");
+  }
+}
+
 void RXMCCodeEmitter::encodeInstruction(const MCInst &MI,
                                         SmallVectorImpl<char> &CB,
                                         SmallVectorImpl<MCFixup> &Fixups,
                                         const MCSubtargetInfo &STI) const {
+  if (MI.getOpcode() == RX::BR_SIZELESS) {
+    SmallVector<MCInst, 2> Insts;
+    expandSizelessBranch(MI, Insts);
+    size_t Start = CB.size();
+    for (const MCInst &I : Insts) {
+      uint32_t Offset = CB.size() - Start;
+      SmallVector<MCFixup, 1> InstFixups;
+      encodeInstruction(I, CB, InstFixups, STI);
+      for (MCFixup F : InstFixups) {
+        F.setOffset(F.getOffset() + Offset);
+        Fixups.push_back(F);
+      }
+    }
+    return;
+  }
   unsigned Size = MCII.get(MI.getOpcode()).getSize();
   uint64_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
   for (unsigned I = Size; I != 0; --I)

@@ -17,9 +17,14 @@
 // Where an instruction has several encodings, the operand classes in
 // RXInstrInfo.td make the matcher choose the same (shortest) one as GNU as.
 //
+// Like GNU as, mov / push / sstr / suntil / swhile / rmpa without a size
+// are .L and movu is .W; bra / bsr Rn are .L; and bra / bsr / b<cond> to a
+// label without a size get the form the distance needs (BR_SIZELESS).
+//
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/RXMCTargetDesc.h"
+#include "MCTargetDesc/RXSizelessBranch.h"
 #include "TargetInfo/RXTargetInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -55,6 +60,12 @@ class RXAsmParser : public MCTargetAsmParser {
   bool parseOperand(OperandVector &Operands);
   bool parseBracketedRegister(OperandVector &Operands);
   void rewriteSubImmediate(OperandVector &Operands);
+  bool parseSizelessBranch(StringRef Name, SMLoc NameLoc,
+                           OperandVector &Operands);
+
+  // The kind (see RXSizelessBranch.h) of a branch to a label written without
+  // a size, set by parseInstruction for matchAndEmitInstruction.
+  std::optional<unsigned> SizelessBranchKind;
 
 #define GET_ASSEMBLER_HEADER
 #include "RXGenAsmMatcher.inc"
@@ -369,6 +380,19 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                           OperandVector &Operands,
                                           MCStreamer &Out, uint64_t &ErrorInfo,
                                           bool MatchingInlineAsm) {
+  if (SizelessBranchKind) {
+    MCInst Inst;
+    Inst.setOpcode(RX::BR_SIZELESS);
+    Inst.addOperand(MCOperand::createExpr(
+        static_cast<RXOperand &>(*Operands[1]).getImm()));
+    Inst.addOperand(MCOperand::createImm(*SizelessBranchKind));
+    Inst.addOperand(MCOperand::createImm(0));
+    Inst.setLoc(IDLoc);
+    SizelessBranchKind.reset();
+    Out.emitInstruction(Inst, getSTI());
+    return false;
+  }
+
   MCInst Inst;
   FeatureBitset MissingFeatures;
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MissingFeatures,
@@ -609,8 +633,65 @@ void RXAsmParser::rewriteSubImmediate(OperandVector &Operands) {
   Operands.push_back(RXOperand::createReg(Reg, DS, DE));
 }
 
+// bra / bsr / b<cond> without a size: "bra Rn" and "bsr Rn" are the .L
+// forms; to a label, the kind of the BR_SIZELESS that matchAndEmitInstruction
+// emits.
+bool RXAsmParser::parseSizelessBranch(StringRef Name, SMLoc NameLoc,
+                                      OperandVector &Operands) {
+  // Condition names, including GNU as's alternatives, by BCnd code.
+  static const struct {
+    const char *Name;
+    unsigned Cond;
+  } Conds[] = {{"eq", 0},  {"z", 0},   {"ne", 1},  {"nz", 1}, {"geu", 2},
+               {"c", 2},   {"ltu", 3}, {"nc", 3},  {"gtu", 4}, {"leu", 5},
+               {"pz", 6},  {"n", 7},   {"ge", 8},  {"lt", 9},  {"gt", 10},
+               {"le", 11}, {"o", 12},  {"no", 13}};
+  std::optional<unsigned> Kind;
+  if (Name.equals_insensitive("bra"))
+    Kind = RX::BrKindBra;
+  else if (Name.equals_insensitive("bsr"))
+    Kind = RX::BrKindBsr;
+  else if (Name.size() > 1 && (Name[0] == 'b' || Name[0] == 'B'))
+    for (const auto &C : Conds)
+      if (Name.drop_front().equals_insensitive(C.Name))
+        Kind = RX::BrKindCond + C.Cond;
+  if (!Kind || Operands.size() != 2)
+    return false;
+  auto &Op = static_cast<RXOperand &>(*Operands[1]);
+  if (Op.isReg() && *Kind <= RX::BrKindBsr) {
+    Operands[0] = RXOperand::createToken(
+        *Kind == RX::BrKindBra ? "bra.l" : "bsr.l", NameLoc);
+    return false;
+  }
+  if (!Op.isBrTarget())
+    return false;
+  int64_t V;
+  if (Op.getImm()->evaluateAsAbsolute(V))
+    return Error(Op.getStartLoc(), "a branch without a size needs a label; "
+                                   "give the size for a displacement");
+  SizelessBranchKind = *Kind;
+  return false;
+}
+
 bool RXAsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                    SMLoc NameLoc, OperandVector &Operands) {
+  SizelessBranchKind.reset();
+  // GNU as's sizes for these mnemonics when none is given.
+  static const struct {
+    const char *Name, *Sized;
+  } DefaultSizes[] = {{"mov", "mov.l"},       {"movu", "movu.w"},
+                      {"push", "push.l"},     {"sstr", "sstr.l"},
+                      {"suntil", "suntil.l"}, {"swhile", "swhile.l"},
+                      {"rmpa", "rmpa.l"}};
+  bool DefaultMov = false;
+  for (const auto &D : DefaultSizes) {
+    if (Name.equals_insensitive(D.Name)) {
+      DefaultMov = Name.equals_insensitive("mov");
+      Name = D.Sized;
+      break;
+    }
+  }
+
   Operands.push_back(RXOperand::createToken(Name, NameLoc));
 
   if (getLexer().isNot(AsmToken::EndOfStatement)) {
@@ -625,6 +706,17 @@ bool RXAsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     return TokError("unexpected token in operand list");
   getParser().Lex(); // eat EndOfStatement
 
+  // GNU as wants the size of an immediate stored to memory.
+  if (DefaultMov && Operands.size() > 2 &&
+      static_cast<RXOperand &>(*Operands[1]).isHashImm() &&
+      llvm::any_of(Operands, [](const auto &Op) {
+        auto &RXOp = static_cast<RXOperand &>(*Op);
+        return RXOp.isToken() && RXOp.getToken() == "[";
+      }))
+    return Error(NameLoc, "mov #imm to memory needs a size (.b, .w or .l)");
+
+  if (parseSizelessBranch(Name, NameLoc, Operands))
+    return true;
   rewriteSubImmediate(Operands);
   return false;
 }
