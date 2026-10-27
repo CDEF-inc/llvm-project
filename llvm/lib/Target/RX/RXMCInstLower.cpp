@@ -55,6 +55,9 @@ static unsigned getMemOpcode(unsigned Opc) {
   case RX::ST_L: return RX::MOV_L_st16;
   case RX::ST_B: return RX::MOV_B_st16;
   case RX::ST_W: return RX::MOV_W_st16;
+  case RX::STI_B: return RX::MOV_B_mi16_b8;
+  case RX::STI_W: return RX::MOV_W_mi16_w16;
+  case RX::STI_L: return RX::MOV_L_mi16_i32;
   default: return Opc;
   }
 }
@@ -260,6 +263,63 @@ bool shrinkMem(MCInst &Inst) {
   return false;
 }
 
+// mov.sz #imm, dsp[Rd] by size: the dsp:5 form, then by immediate field
+// (8, 16, 24, 32 bits) the forms without displacement, with dsp:8 and with
+// dsp:16.
+struct MovImmFamily {
+  unsigned Scale, D5;
+  unsigned Forms[4][3];
+};
+
+const MovImmFamily MovImmFamilies[] = {
+    {1, RX::MOV_B_mi5,
+     {{RX::MOV_B_mi0_b8, RX::MOV_B_mi8_b8, RX::MOV_B_mi16_b8}}},
+    {2, RX::MOV_W_mi5,
+     {{RX::MOV_W_mi0_w8, RX::MOV_W_mi8_w8, RX::MOV_W_mi16_w8},
+      {RX::MOV_W_mi0_w16, RX::MOV_W_mi8_w16, RX::MOV_W_mi16_w16}}},
+    {4, RX::MOV_L_mi5,
+     {{RX::MOV_L_mi0_s8, RX::MOV_L_mi8_s8, RX::MOV_L_mi16_s8},
+      {RX::MOV_L_mi0_s16, RX::MOV_L_mi8_s16, RX::MOV_L_mi16_s16},
+      {RX::MOV_L_mi0_s24, RX::MOV_L_mi8_s24, RX::MOV_L_mi16_s24},
+      {RX::MOV_L_mi0_i32, RX::MOV_L_mi8_i32, RX::MOV_L_mi16_i32}}},
+};
+
+// mov.sz #imm, dsp:16[Rd] (rd, dsp, imm; from the STI_* pseudos): the
+// dsp:5 form (3 bytes) when Rd is R0-R7 and the stored value is 0-255,
+// otherwise the shortest displacement and immediate fields.
+bool shrinkMovImm(MCInst &Inst) {
+  for (const MovImmFamily &F : MovImmFamilies) {
+    unsigned NumImms = F.Scale == 1 ? 1 : F.Scale == 2 ? 2 : 4;
+    if (Inst.getOpcode() != F.Forms[NumImms - 1][2])
+      continue;
+    MCOperand Base = Inst.getOperand(0);
+    int64_t Dsp = Inst.getOperand(1).getImm();
+    const MCOperand &ImmOp = Inst.getOperand(2);
+    if (!ImmOp.isImm())
+      return true;
+    unsigned Bits = 8 * F.Scale;
+    uint64_t Stored = ImmOp.getImm() & maskTrailingOnes<uint64_t>(Bits);
+    int64_t V = SignExtend64(Stored, Bits);
+    if (Dsp / F.Scale <= 31 && isLowReg(Base.getReg()) && Stored <= 255) {
+      setOpcodeAndOperands(Inst, F.D5,
+                           {Base, MCOperand::createImm(Dsp),
+                            MCOperand::createImm(Stored)});
+      return true;
+    }
+    unsigned I = isInt<8>(V) ? 0 : isInt<16>(V) ? 1 : isInt<24>(V) ? 2 : 3;
+    if (I >= NumImms)
+      I = NumImms - 1;
+    MCOperand Imm = MCOperand::createImm(V);
+    if (Dsp == 0)
+      setOpcodeAndOperands(Inst, F.Forms[I][0], {Base, Imm});
+    else
+      setOpcodeAndOperands(Inst, F.Forms[I][Dsp / F.Scale <= 255 ? 1 : 2],
+                           {Base, MCOperand::createImm(Dsp), Imm});
+    return true;
+  }
+  return false;
+}
+
 bool shrinkRRR(MCInst &Inst) {
   for (const RRRFamily &F : RRRFamilies) {
     if (Inst.getOpcode() != F.RRR)
@@ -297,5 +357,5 @@ bool shrinkShift(MCInst &Inst) {
 
 void llvm::shrinkRXInst(MCInst &Inst) {
   shrinkImm(Inst) || shrinkAddImm(Inst) || shrinkMem(Inst) ||
-      shrinkRRR(Inst) || shrinkShift(Inst);
+      shrinkMovImm(Inst) || shrinkRRR(Inst) || shrinkShift(Inst);
 }
