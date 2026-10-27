@@ -1504,11 +1504,12 @@ def RSTR_i : SaveRstrI<1, "rstr">;
 // RXv3 double-precision FPU (DFPU)
 //===----------------------------------------------------------------------===//
 
-// dsp[Rn] for 64-bit accesses (scaled by 8).
+// dsp[Rn] of dmov.d: scaled by 4, not 8 as the RXv3 manual's note says
+// (an RX72M and Renesas CC-RX both scale by 4: 8[R7] is dsp 2).
 def Dsp16DClass : RXDspClass<"Dsp16D">;
 def Dsp8DClass  : RXDspClass<"Dsp8D", [Dsp16DClass]>;
-def dsp8d  : RXDsp<"Dsp8D", 3>;
-def dsp16d : RXDsp<"Dsp16D", 3>;
+def dsp8d  : RXDsp<"Dsp8D", 2>;
+def dsp16d : RXDsp<"Dsp16D", 2>;
 
 // The second register of a DRm-DRn / DCRm-DCRn range, encoded as n - m.
 def dprhi : RegisterOperand<DPR> { let EncoderMethod = "getRegRangeOpValue"; }

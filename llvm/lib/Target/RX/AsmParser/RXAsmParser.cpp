@@ -189,8 +189,8 @@ public:
   bool isDsp16B() const { return isDsp(65535, 1); }
   bool isDsp16W() const { return isDsp(65535, 2); }
   bool isDsp16L() const { return isDsp(65535, 4); }
-  bool isDsp8D() const { return isDsp(255, 8); }
-  bool isDsp16D() const { return isDsp(65535, 8); }
+  bool isDsp8D() const { return isDsp(255, 4); }
+  bool isDsp16D() const { return isDsp(65535, 4); }
 
   bool isBrTarget() const { return Kind == k_Imm && !HasHash; }
 
