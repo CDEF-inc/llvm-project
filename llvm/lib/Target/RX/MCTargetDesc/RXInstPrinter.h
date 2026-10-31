@@ -37,12 +37,11 @@ private:
   void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O);
   // Displacement of "dsp[Rn]": printed without '#'.
   void printDisp(const MCInst *MI, unsigned OpNo, raw_ostream &O);
-  // Branch target: a label, or a displacement from the instruction.
+  // Branch target: a label, or a displacement from the instruction (the
+  // target address when disassembling with PrintBranchImmAsAddress).
   void printPCRel(const MCInst *MI, unsigned OpNo, raw_ostream &O);
   void printPCRel(const MCInst *MI, uint64_t Address, unsigned OpNo,
-                  raw_ostream &O) {
-    printPCRel(MI, OpNo, O);
-  }
+                  raw_ostream &O);
 };
 
 } // end namespace llvm

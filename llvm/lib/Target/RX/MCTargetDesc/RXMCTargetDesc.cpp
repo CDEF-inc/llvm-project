@@ -15,6 +15,7 @@
 #include "RXMCAsmInfo.h"
 #include "TargetInfo/RXTargetInfo.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
@@ -73,6 +74,12 @@ static MCInstPrinter *createRXMCInstPrinter(const Triple &T,
   return new RXInstPrinter(MAI, MII, MRI);
 }
 
+// The default analysis evaluates branches: the target is the first operand,
+// a displacement from the start of the instruction.
+static MCInstrAnalysis *createRXMCInstrAnalysis(const MCInstrInfo *Info) {
+  return new MCInstrAnalysis(Info);
+}
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRXTargetMC() {
   Target &TheRXTarget = getTheRXTarget();
   RegisterMCAsmInfoFn X(TheRXTarget, createRXMCAsmInfo);
@@ -81,6 +88,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRXTargetMC() {
   TargetRegistry::RegisterMCSubtargetInfo(TheRXTarget,
                                           createRXMCSubtargetInfo);
   TargetRegistry::RegisterMCInstPrinter(TheRXTarget, createRXMCInstPrinter);
+  TargetRegistry::RegisterMCInstrAnalysis(TheRXTarget,
+                                          createRXMCInstrAnalysis);
   TargetRegistry::RegisterMCCodeEmitter(TheRXTarget, createRXMCCodeEmitter);
   TargetRegistry::RegisterMCAsmBackend(TheRXTarget, createRXMCAsmBackend);
   TargetRegistry::RegisterObjectTargetStreamer(TheRXTarget,

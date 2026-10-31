@@ -87,3 +87,14 @@ void RXInstPrinter::printPCRel(const MCInst *MI, unsigned OpNo,
   else
     MAI.printExpr(O, *Op.getExpr());
 }
+
+void RXInstPrinter::printPCRel(const MCInst *MI, uint64_t Address,
+                               unsigned OpNo, raw_ostream &O) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  if (Op.isImm() && PrintBranchImmAsAddress) {
+    // Displacements are from the start of the branch instruction.
+    O << formatHex((Address + Op.getImm()) & 0xffffffff);
+    return;
+  }
+  printPCRel(MI, OpNo, O);
+}

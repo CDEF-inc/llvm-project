@@ -46,15 +46,23 @@ def ImmB8Class    : RXImmClass<"ImmB8">;
 def ImmW16Class   : RXImmClass<"ImmW16">;
 def ImmW8Class    : RXImmClass<"ImmW8", [ImmW16Class]>;
 
+// Sign-extended immediates (the disassembler sign-extends the field).
+class RXSImm<AsmOperandClass cls, int width> : Operand<i32> {
+  let ParserMatchClass = cls;
+  let DecoderMethod = "decodeSImm<"#width#">";
+}
+
 def immu4   : Operand<i32> { let ParserMatchClass = ImmU4Class; }
 def immu5   : Operand<i32> { let ParserMatchClass = ImmU5Class; }
 def immu8   : Operand<i32> { let ParserMatchClass = ImmU8Class; }
-def imms8   : Operand<i32> { let ParserMatchClass = ImmS8Class; }
-def imms8n  : Operand<i32> { let ParserMatchClass = ImmS8NegClass; }
-def imms16  : Operand<i32> { let ParserMatchClass = ImmS16Class; }
-def imms24  : Operand<i32> { let ParserMatchClass = ImmS24Class; }
-def immb8   : Operand<i32> { let ParserMatchClass = ImmB8Class; }
-def immw8   : Operand<i32> { let ParserMatchClass = ImmW8Class; }
+def imms8   : RXSImm<ImmS8Class, 8>;
+def imms8n  : RXSImm<ImmS8NegClass, 8>;
+def imms16  : RXSImm<ImmS16Class, 16>;
+def imms24  : RXSImm<ImmS24Class, 24>;
+// Signed, so that 80h..FFh read back as -128..-1: the assembler takes
+// 128..255 for the shorter MOV.B #uimm8 forms where they fit.
+def immb8   : RXSImm<ImmB8Class, 8>;
+def immw8   : RXSImm<ImmW8Class, 8>;
 def immw16  : Operand<i32> { let ParserMatchClass = ImmW16Class; }
 def imm32   : Operand<i32> {
   let ParserMatchClass = ImmS32Class;
@@ -64,6 +72,7 @@ def imm32   : Operand<i32> {
 def rtsdimm : Operand<i32> {
   let ParserMatchClass = RtsdImmClass;
   let EncoderMethod = "getScaledOpValue<2>";
+  let DecoderMethod = "decodeScaled<2>";
 }
 
 // Displacements written as "dsp[Rn]" (no '#'). The value is in bytes and
@@ -86,6 +95,7 @@ foreach S = ["B", "W", "L"] in {
 class RXDsp<string cls, int shift> : Operand<i32> {
   let ParserMatchClass = !cast<AsmOperandClass>(cls#"Class");
   let EncoderMethod = "getScaledOpValue<"#shift#">";
+  let DecoderMethod = "decodeScaled<"#shift#">";
   let PrintMethod = "printDisp";
 }
 
@@ -101,17 +111,18 @@ def BrTargetClass : AsmOperandClass {
   let RenderMethod = "addImmOperands";
 }
 
-class RXBrTarget<string encoder> : Operand<OtherVT> {
+class RXBrTarget<string encoder, string decoder> : Operand<OtherVT> {
   let ParserMatchClass = BrTargetClass;
   let EncoderMethod = encoder;
+  let DecoderMethod = decoder;
   let PrintMethod = "printPCRel";
   let OperandType = "OPERAND_PCREL";
 }
 
-def brtarget3  : RXBrTarget<"getBrTarget3OpValue">;
-def brtarget8  : RXBrTarget<"getBrTarget8OpValue">;
-def brtarget16 : RXBrTarget<"getBrTarget16OpValue">;
-def brtarget24 : RXBrTarget<"getBrTarget24OpValue">;
+def brtarget3  : RXBrTarget<"getBrTarget3OpValue", "decodeBrTarget3">;
+def brtarget8  : RXBrTarget<"getBrTarget8OpValue", "decodeSImm<8>">;
+def brtarget16 : RXBrTarget<"getBrTarget16OpValue", "decodeSImm<16>">;
+def brtarget24 : RXBrTarget<"getBrTarget24OpValue", "decodeSImm<24>">;
 
 //===----------------------------------------------------------------------===//
 // Data transfer: MOV / MOVU
@@ -2266,6 +2277,7 @@ def MvfacImmClass : RXImmClass<"MvfacImm">;
 def mvfacimm : Operand<i32> {
   let ParserMatchClass = MvfacImmClass;
   let EncoderMethod = "getMvfacImmOpValue";
+  let DecoderMethod = "decodeMvfacImm";
 }
 class MvfacBase<bits<2> op, dag ins, string asmstr>
     : RXInst24<(outs GPR:$rd), ins, asmstr> {
@@ -2293,6 +2305,7 @@ def RacImmClass : RXImmClass<"RacImm">;
 def racimm : Operand<i32> {
   let ParserMatchClass = RacImmClass;
   let EncoderMethod = "getRacImmOpValue";
+  let DecoderMethod = "decodeRacImm";
 }
 class RacBase<bit l, bit r, dag ins, string asmstr>
     : RXInst24<(outs), ins, asmstr> {
@@ -2314,6 +2327,9 @@ class RacV1<bit l, bit r, string mn>
 }
 
 let hasSideEffects = 1 in {
+// The RXv1 forms are the RXv2 ones with A0 and no shift; the disassembler
+// tries them first only for RXv1.
+let DecoderNamespace = "RXv1" in {
 def MULHI_V1 : DSPMulV1<0b000, "mulhi">;
 def MULLO_V1 : DSPMulV1<0b001, "mullo">;
 def MACHI_V1 : DSPMulV1<0b100, "machi">;
@@ -2324,6 +2340,7 @@ def MVFACHI_V1 : MvfacV1<0b00, "mvfachi">;
 def MVFACLO_V1 : MvfacV1<0b01, "mvfaclo">;
 def MVFACMI_V1 : MvfacV1<0b10, "mvfacmi">;
 def RACW_V1 : RacV1<0, 0, "racw">;
+}
 
 let Predicates = [HasRXv2] in {
 def MULHI : DSPMul<0, 0b000, "mulhi">;
@@ -2399,6 +2416,8 @@ class BFMov<bits<8> op, string mn, dag outs, dag rdin, string cons>
                                      bfwidth:$width, GPR:$rs)),
                mn#"\t$slsb, $dlsb, $width, $rs, $rd"> {
   let Constraints = cons;
+  // The three immediates share one field.
+  let DecoderMethod = "decodeBFMov";
   bits<4> rs;
   bits<4> rd;
   bits<16> width;
@@ -2453,8 +2472,14 @@ def dsp8d  : RXDsp<"Dsp8D", 2>;
 def dsp16d : RXDsp<"Dsp16D", 2>;
 
 // The second register of a DRm-DRn / DCRm-DCRn range, encoded as n - m.
-def dprhi : RegisterOperand<DPR> { let EncoderMethod = "getRegRangeOpValue"; }
-def dcrhi : RegisterOperand<DCR> { let EncoderMethod = "getRegRangeOpValue"; }
+def dprhi : RegisterOperand<DPR> {
+  let EncoderMethod = "getRegRangeOpValue";
+  let DecoderMethod = "decodeDPRRange";
+}
+def dcrhi : RegisterOperand<DCR> {
+  let EncoderMethod = "getRegRangeOpValue";
+  let DecoderMethod = "decodeDCRRange";
+}
 
 // op DRs, DRs2, DRd: 0111 0110 1001 0000 rs2 op rd rs
 class DFPU3<bits<4> op, string mn>
