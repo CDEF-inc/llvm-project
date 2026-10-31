@@ -15,6 +15,7 @@
 #include "RXMCAsmInfo.h"
 #include "TargetInfo/RXTargetInfo.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
@@ -73,6 +74,39 @@ static MCInstPrinter *createRXMCInstPrinter(const Triple &T,
   return new RXInstPrinter(MAI, MII, MRI);
 }
 
+namespace {
+
+class RXMCInstrAnalysis : public MCInstrAnalysis {
+public:
+  explicit RXMCInstrAnalysis(const MCInstrInfo *Info)
+      : MCInstrAnalysis(Info) {}
+
+  // The target of a direct branch or call is its PC-relative operand, a
+  // displacement from the start of the instruction. Indirect ones (jmp, jsr,
+  // bra.l, bsr.l) have none.
+  bool evaluateBranch(const MCInst &Inst, uint64_t Addr, uint64_t Size,
+                      uint64_t &Target) const override {
+    const MCInstrDesc &Desc = Info->get(Inst.getOpcode());
+    if (!Desc.isBranch() && !Desc.isCall())
+      return false;
+    for (unsigned I = 0, E = Inst.getNumOperands(); I != E; ++I) {
+      if (I >= Desc.getNumOperands() ||
+          Desc.operands()[I].OperandType != MCOI::OPERAND_PCREL ||
+          !Inst.getOperand(I).isImm())
+        continue;
+      Target = (Addr + Inst.getOperand(I).getImm()) & 0xffffffff;
+      return true;
+    }
+    return false;
+  }
+};
+
+} // end anonymous namespace
+
+static MCInstrAnalysis *createRXMCInstrAnalysis(const MCInstrInfo *Info) {
+  return new RXMCInstrAnalysis(Info);
+}
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRXTargetMC() {
   Target &TheRXTarget = getTheRXTarget();
   RegisterMCAsmInfoFn X(TheRXTarget, createRXMCAsmInfo);
@@ -81,6 +115,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRXTargetMC() {
   TargetRegistry::RegisterMCSubtargetInfo(TheRXTarget,
                                           createRXMCSubtargetInfo);
   TargetRegistry::RegisterMCInstPrinter(TheRXTarget, createRXMCInstPrinter);
+  TargetRegistry::RegisterMCInstrAnalysis(TheRXTarget,
+                                          createRXMCInstrAnalysis);
   TargetRegistry::RegisterMCCodeEmitter(TheRXTarget, createRXMCCodeEmitter);
   TargetRegistry::RegisterMCAsmBackend(TheRXTarget, createRXMCAsmBackend);
   TargetRegistry::RegisterObjectTargetStreamer(TheRXTarget,
