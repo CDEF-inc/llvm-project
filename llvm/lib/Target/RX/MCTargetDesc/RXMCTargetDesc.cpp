@@ -41,8 +41,9 @@ static MCInstrInfo *createRXMCInstrInfo() {
 
 static MCRegisterInfo *createRXMCRegisterInfo(const Triple &TT) {
   auto *X = new MCRegisterInfo();
-  // There is no link register; the return address lives on the stack.
-  InitRXMCRegisterInfo(X, RX::R0);
+  // There is no link register; the return address lives on the stack. PC
+  // names the return address column of the CFI, as in GCC.
+  InitRXMCRegisterInfo(X, RX::PC);
   return X;
 }
 
@@ -58,10 +59,12 @@ static MCAsmInfo *createRXMCAsmInfo(const MCRegisterInfo &MRI,
                                     const MCTargetOptions &Options) {
   MCAsmInfo *MAI = new RXMCAsmInfo(TT, Options);
 
-  // On entry the CFA is SP + 4 (the return address pushed by BSR/JSR).
-  MCCFIInstruction Inst = MCCFIInstruction::cfiDefCfa(
-      nullptr, MRI.getDwarfRegNum(RX::R0, true), 4);
-  MAI->addInitialFrameState(Inst);
+  // On entry the CFA is SP + 4, and the return address pushed by BSR/JSR is
+  // at CFA - 4.
+  MAI->addInitialFrameState(MCCFIInstruction::cfiDefCfa(
+      nullptr, MRI.getDwarfRegNum(RX::R0, true), 4));
+  MAI->addInitialFrameState(MCCFIInstruction::createOffset(
+      nullptr, MRI.getDwarfRegNum(RX::PC, true), -4));
 
   return MAI;
 }

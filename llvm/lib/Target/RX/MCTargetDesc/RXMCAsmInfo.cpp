@@ -19,9 +19,13 @@ RXMCAsmInfo::RXMCAsmInfo(const Triple &TT, const MCTargetOptions &Options)
   // GNU as for rx-elf uses ';' as the line comment character.
   CommentString = ";";
   SupportsDebugInformation = true;
-  // GNU as for rx-elf rejects .cfi_* directives (GCC does not emit them
-  // either), so there is no unwind information for now.
+  // There are no exceptions (panic=abort), but functions with debug info get
+  // a .debug_frame, and ones with uwtable an .eh_frame. Both come from
+  // .cfi_* directives, which GNU as for rx-elf rejects (GCC writes the
+  // .debug_frame bytes itself), so only the integrated assembler can
+  // assemble such output.
   ExceptionsType = ExceptionHandling::None;
+  UsesCFIWithoutEH = true;
   DwarfRegNumForCFI = true;
   UsesELFSectionDirectiveForBSS = true;
 }

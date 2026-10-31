@@ -15,6 +15,7 @@
 #include "RXInstrInfo.h"
 #include "RXMachineFunctionInfo.h"
 #include "RXSubtarget.h"
+#include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -63,10 +64,29 @@ void RXFrameLowering::emitPrologue(MachineFunction &MF,
          (MBBI->getOpcode() == RX::PUSH_L || MBBI->getOpcode() == RX::PUSHM))
     ++MBBI;
 
-  uint64_t NumBytes = MFI.getStackSize() - FI->getCalleeSavedFrameSize();
-  if (NumBytes)
+  // The CFA is SP + 4 on entry (createRXMCAsmInfo). Only the prologue is
+  // described, as GCC does; the epilogue moves SP only in its last one or
+  // two instructions.
+  bool NeedsCFI = MF.needsFrameMoves();
+  CFIInstBuilder CFIBuilder(MBB, MBBI, MachineInstr::FrameSetup);
+  uint64_t RegBytes = FI->getCalleeSavedFrameSize();
+  if (NeedsCFI && RegBytes) {
+    // The push put the lowest register at the lowest address.
+    CFIBuilder.buildDefCFAOffset(4 + RegBytes);
+    int64_t Offset = -static_cast<int64_t>(4 + RegBytes);
+    for (const CalleeSavedInfo &I : MFI.getCalleeSavedInfo()) {
+      CFIBuilder.buildOffset(I.getReg(), Offset);
+      Offset += 4;
+    }
+  }
+
+  uint64_t NumBytes = MFI.getStackSize() - RegBytes;
+  if (NumBytes) {
     adjustSP(MBB, MBBI, DL, TII, -static_cast<int64_t>(NumBytes),
              MachineInstr::FrameSetup);
+    if (NeedsCFI)
+      CFIBuilder.buildDefCFAOffset(4 + RegBytes + NumBytes);
+  }
 }
 
 void RXFrameLowering::emitEpilogue(MachineFunction &MF,
