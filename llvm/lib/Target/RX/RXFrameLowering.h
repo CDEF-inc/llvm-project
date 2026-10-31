@@ -10,11 +10,13 @@
 //
 //   [caller's outgoing arguments]   <- SP at entry + 4
 //   return address                  <- SP at entry (pushed by BSR/JSR)
-//   callee-saved registers          (push.l each)
+//   callee-saved registers          (one pushm, lowest register lowest)
 //   locals and spill slots
 //   outgoing arguments              <- SP after the prologue
 //
-// No frame pointer is used.
+// No frame pointer is used. The callee-saved registers are saved as one
+// range (any unused ones in between too), so that pushm saves them and rtsd
+// frees the frame, restores them and returns in one instruction.
 //
 //===----------------------------------------------------------------------===//
 
@@ -42,6 +44,9 @@ public:
   MachineBasicBlock::iterator
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator I) const override;
+
+  void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
+                            RegScavenger *RS) const override;
 
   bool spillCalleeSavedRegisters(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MI,
