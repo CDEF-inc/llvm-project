@@ -26,8 +26,9 @@ using namespace llvm;
 #define GET_REGINFO_TARGET_DESC
 #include "RXGenRegisterInfo.inc"
 
-// The return address lives on the stack; there is no link register.
-RXRegisterInfo::RXRegisterInfo() : RXGenRegisterInfo(RX::R0) {}
+// The return address lives on the stack; there is no link register. PC
+// names the return address column of the CFI, as in GCC.
+RXRegisterInfo::RXRegisterInfo() : RXGenRegisterInfo(RX::PC) {}
 
 const MCPhysReg *
 RXRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
