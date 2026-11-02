@@ -147,7 +147,7 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
-  setOperationAction(ISD::VASTART, MVT::Other, Expand);
+  setOperationAction(ISD::VASTART, MVT::Other, Custom);
   setOperationAction(ISD::VAARG, MVT::Other, Expand);
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
@@ -190,6 +190,8 @@ SDValue RXTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FDIV:
   case ISD::FSQRT:
     return lowerFPArith(Op, DAG);
+  case ISD::VASTART:
+    return lowerVASTART(Op, DAG);
   case ISD::ATOMIC_FENCE:
     // Single-core: only the compiler must not reorder across a fence.
     return DAG.getNode(ISD::MEMBARRIER, SDLoc(Op), MVT::Other,
@@ -711,7 +713,26 @@ SDValue RXTargetLowering::LowerFormalArguments(
       ArgValue = DAG.getNode(ISD::TRUNCATE, DL, VA.getValVT(), ArgValue);
     InVals.push_back(ArgValue);
   }
+
+  // In a variadic function the unnamed arguments follow the named stack
+  // arguments (the last named one is always on the stack).
+  if (IsVarArg)
+    MF.getInfo<RXMachineFunctionInfo>()->setVarArgsFrameIndex(
+        MFI.CreateFixedObject(4, CCInfo.getStackSize(), /*IsImmutable=*/true));
   return Chain;
+}
+
+// va_list is a pointer to the next unnamed argument on the stack (as in
+// GCC); va_arg is the default expansion, which advances it by the argument
+// size rounded up to 4 (i64 and double are 4-byte aligned, as on the stack).
+SDValue RXTargetLowering::lowerVASTART(SDValue Op, SelectionDAG &DAG) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDLoc DL(Op);
+  SDValue FI = DAG.getFrameIndex(
+      MF.getInfo<RXMachineFunctionInfo>()->getVarArgsFrameIndex(), MVT::i32);
+  const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
+  return DAG.getStore(Op.getOperand(0), DL, FI, Op.getOperand(1),
+                      MachinePointerInfo(SV));
 }
 
 static SDValue promoteValue(SDValue V, const CCValAssign &VA,
