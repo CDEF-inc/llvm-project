@@ -64,9 +64,10 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SETCC, MVT::i32, Custom);
   setOperationAction(ISD::SELECT, MVT::i32, Expand);
   setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
+  // Jump tables hold absolute addresses (the relocation model is static):
+  // BR_JT expands to a load from the table and a jmp.
   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
-  setOperationAction(ISD::JumpTable, MVT::i32, Expand);
-  setMinimumJumpTableEntries(UINT_MAX);
+  setOperationAction(ISD::JumpTable, MVT::i32, Custom);
 
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
 
@@ -173,6 +174,8 @@ SDValue RXTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return lowerExternalSymbol(Op, DAG);
   case ISD::BlockAddress:
     return lowerBlockAddress(Op, DAG);
+  case ISD::JumpTable:
+    return lowerJumpTable(Op, DAG);
   case ISD::BR_CC:
     return lowerBR_CC(Op, DAG);
   case ISD::SETCC:
@@ -218,6 +221,13 @@ SDValue RXTargetLowering::lowerBlockAddress(SDValue Op,
   EVT PtrVT = Op.getValueType();
   SDValue BA = DAG.getTargetBlockAddress(N->getBlockAddress(), PtrVT);
   return DAG.getNode(RXISD::Wrapper, SDLoc(Op), PtrVT, BA);
+}
+
+SDValue RXTargetLowering::lowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
+  auto *N = cast<JumpTableSDNode>(Op);
+  EVT PtrVT = Op.getValueType();
+  SDValue JT = DAG.getTargetJumpTable(N->getIndex(), PtrVT);
+  return DAG.getNode(RXISD::Wrapper, SDLoc(Op), PtrVT, JT);
 }
 
 // The RX FPU gives IEEE results only for operands that are not NaN,
