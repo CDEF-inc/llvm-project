@@ -1,0 +1,92 @@
+# REQUIRES: rx
+## The relocation stack wraps around at 32 bits, as GNU ld's int32_t
+## arithmetic does, but without its undefined behaviour: INT32_MIN / -1,
+## INT32_MIN % -1, -INT32_MIN and a left shift out of the top bit. Neither
+## llvm-mc nor GNU as emits these operators, so the relocation types are
+## numbers: 0x80 R_RX_SYM, 0x81 R_RX_OPneg, 0x85 R_RX_OPdiv, 0x86 R_RX_OPshla,
+## 0x94 R_RX_OPmod, 0x41 R_RX_ABS32.
+
+# RUN: yaml2obj --docnum=1 %s -o %t1.o
+# RUN: ld.lld %t1.o -o %t1
+# RUN: llvm-objdump -s -j .data %t1 | FileCheck %s
+
+# CHECK:      Contents of section .data:
+# CHECK-NEXT: 00000080 00000000 00000080 10000000
+
+## A shift count outside [0, 31] and division by zero are errors.
+# RUN: yaml2obj --docnum=2 %s -o %t2.o
+# RUN: not ld.lld %t2.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERR \
+# RUN:   --implicit-check-not=error:
+
+# ERR-DAG: error: {{.*}}.o:(.data+0x0): R_RX_OPshla: shift count 32 is not in [0, 31]
+# ERR-DAG: error: {{.*}}.o:(.data+0x4): R_RX_OPdiv: division by zero
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS32
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_RX
+Sections:
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  16
+  - Name: .rela.data
+    Type: SHT_RELA
+    Info: .data
+    Relocations:
+      ## INT32_MIN / -1 = INT32_MIN
+      - { Offset: 0, Symbol: m1,  Type: 0x80 }
+      - { Offset: 0, Symbol: min, Type: 0x80 }
+      - { Offset: 0, Type: 0x85 }
+      - { Offset: 0, Type: 0x41 }
+      ## INT32_MIN % -1 = 0
+      - { Offset: 4, Symbol: m1,  Type: 0x80 }
+      - { Offset: 4, Symbol: min, Type: 0x80 }
+      - { Offset: 4, Type: 0x94 }
+      - { Offset: 4, Type: 0x41 }
+      ## -INT32_MIN = INT32_MIN
+      - { Offset: 8, Symbol: min, Type: 0x80 }
+      - { Offset: 8, Type: 0x81 }
+      - { Offset: 8, Type: 0x41 }
+      ## 0x10000001 << 4 = 0x10
+      - { Offset: 12, Symbol: four, Type: 0x80 }
+      - { Offset: 12, Symbol: big,  Type: 0x80 }
+      - { Offset: 12, Type: 0x86 }
+      - { Offset: 12, Type: 0x41 }
+Symbols:
+  - { Name: m1,   Index: SHN_ABS, Value: 0xffffffff, Binding: STB_GLOBAL }
+  - { Name: min,  Index: SHN_ABS, Value: 0x80000000, Binding: STB_GLOBAL }
+  - { Name: four, Index: SHN_ABS, Value: 4,          Binding: STB_GLOBAL }
+  - { Name: big,  Index: SHN_ABS, Value: 0x10000001, Binding: STB_GLOBAL }
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS32
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_RX
+Sections:
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  8
+  - Name: .rela.data
+    Type: SHT_RELA
+    Info: .data
+    Relocations:
+      ## 1 << 32
+      - { Offset: 0, Symbol: n32, Type: 0x80 }
+      - { Offset: 0, Symbol: one, Type: 0x80 }
+      - { Offset: 0, Type: 0x86 }
+      - { Offset: 0, Type: 0x41 }
+      ## 1 / 0
+      - { Offset: 4, Symbol: zero, Type: 0x80 }
+      - { Offset: 4, Symbol: one,  Type: 0x80 }
+      - { Offset: 4, Type: 0x85 }
+      - { Offset: 4, Type: 0x41 }
+Symbols:
+  - { Name: n32,  Index: SHN_ABS, Value: 32, Binding: STB_GLOBAL }
+  - { Name: one,  Index: SHN_ABS, Value: 1,  Binding: STB_GLOBAL }
+  - { Name: zero, Index: SHN_ABS, Value: 0,  Binding: STB_GLOBAL }
