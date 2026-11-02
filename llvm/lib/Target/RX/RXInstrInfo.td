@@ -2752,6 +2752,17 @@ def SELECT : RXPseudo<(outs GPR:$rd), (ins GPR:$t, GPR:$f, i32imm:$cc),
                             (RXselectcc (i32 GPR:$t), (i32 GPR:$f),
                                         imm:$cc))]>;
 
+// 32 x 32 -> 64 multiplies: emul / emulu, whose result is a register pair
+// (see EmitInstrWithCustomInserter).
+let usesCustomInserter = 1, isCommutable = 1 in {
+def SMUL_LOHI_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a, GPR:$b),
+                           [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                                 (smullohi (i32 GPR:$a), (i32 GPR:$b)))]>;
+def UMUL_LOHI_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a, GPR:$b),
+                           [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                                 (umullohi (i32 GPR:$a), (i32 GPR:$b)))]>;
+}
+
 // Conditional branch on a condition code; lowered to b<cond>.b. Branch
 // relaxation inverts it around a bra.a when the target is out of range.
 let isBranch = 1, isTerminator = 1, Uses = [PSW], Size = 2 in
@@ -2790,12 +2801,14 @@ def : Pat<(RXcall texternalsym:$dst), (BSR_call texternalsym:$dst)>;
 def : Pat<(RXcall GPR:$rs), (JSR GPR:$rs)>;
 def : Pat<(RXretglue), (RTS)>;
 def : Pat<(br bb:$dst), (BRA_A bb:$dst)>;
+def : Pat<(brind GPR:$rs), (JMP GPR:$rs)>;
 
 // Constants and addresses.
 def : Pat<(i32 imm:$imm), (MOV_L_ri32 imm:$imm)>;
 def : Pat<(RXWrapper tglobaladdr:$a), (MOV_L_ri32 tglobaladdr:$a)>;
 def : Pat<(RXWrapper texternalsym:$a), (MOV_L_ri32 texternalsym:$a)>;
 def : Pat<(RXWrapper tblockaddress:$a), (MOV_L_ri32 tblockaddress:$a)>;
+def : Pat<(RXWrapper tjumptable:$a), (MOV_L_ri32 tjumptable:$a)>;
 
 // Loads and stores. The pseudos take a (base, dsp) memory operand so that
 // the AddrX complex patterns can fill it; RXMCInstLower turns them into the

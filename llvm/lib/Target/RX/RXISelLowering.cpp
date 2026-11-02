@@ -64,18 +64,22 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SETCC, MVT::i32, Custom);
   setOperationAction(ISD::SELECT, MVT::i32, Expand);
   setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
+  // Jump tables hold absolute addresses (the relocation model is static):
+  // BR_JT expands to a load from the table and a jmp.
   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
-  setOperationAction(ISD::JumpTable, MVT::i32, Expand);
-  setMinimumJumpTableEntries(UINT_MAX);
+  setOperationAction(ISD::JumpTable, MVT::i32, Custom);
 
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
 
-  // Operations without an RX instruction.
+  // Operations without an RX instruction. SMUL_LOHI / UMUL_LOHI are emul /
+  // emulu (see EmitInstrWithCustomInserter), so MULHS / MULHU, multiplies
+  // with an overflow check, i64 multiplies and divisions by a constant
+  // expand to them.
   for (unsigned Op :
        {ISD::SREM, ISD::UREM, ISD::SDIVREM, ISD::UDIVREM, ISD::MULHS,
-        ISD::MULHU, ISD::SMUL_LOHI, ISD::UMUL_LOHI, ISD::CTLZ, ISD::CTTZ,
-        ISD::CTPOP, ISD::UMIN, ISD::UMAX, ISD::SHL_PARTS, ISD::SRL_PARTS,
-        ISD::SRA_PARTS, ISD::UADDO_CARRY, ISD::USUBO_CARRY, ISD::BITREVERSE})
+        ISD::MULHU, ISD::CTLZ, ISD::CTTZ, ISD::CTPOP, ISD::UMIN, ISD::UMAX,
+        ISD::SHL_PARTS, ISD::SRL_PARTS, ISD::SRA_PARTS, ISD::UADDO_CARRY,
+        ISD::USUBO_CARRY, ISD::BITREVERSE})
     setOperationAction(Op, MVT::i32, Expand);
 
   // Wider additions and subtractions use the carry chain (add/adc,
@@ -170,6 +174,8 @@ SDValue RXTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return lowerExternalSymbol(Op, DAG);
   case ISD::BlockAddress:
     return lowerBlockAddress(Op, DAG);
+  case ISD::JumpTable:
+    return lowerJumpTable(Op, DAG);
   case ISD::BR_CC:
     return lowerBR_CC(Op, DAG);
   case ISD::SETCC:
@@ -215,6 +221,13 @@ SDValue RXTargetLowering::lowerBlockAddress(SDValue Op,
   EVT PtrVT = Op.getValueType();
   SDValue BA = DAG.getTargetBlockAddress(N->getBlockAddress(), PtrVT);
   return DAG.getNode(RXISD::Wrapper, SDLoc(Op), PtrVT, BA);
+}
+
+SDValue RXTargetLowering::lowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
+  auto *N = cast<JumpTableSDNode>(Op);
+  EVT PtrVT = Op.getValueType();
+  SDValue JT = DAG.getTargetJumpTable(N->getIndex(), PtrVT);
+  return DAG.getNode(RXISD::Wrapper, SDLoc(Op), PtrVT, JT);
 }
 
 // The RX FPU gives IEEE results only for operands that are not NaN,
@@ -888,9 +901,32 @@ RXTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
 MachineBasicBlock *
 RXTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                                               MachineBasicBlock *BB) const {
-  assert(MI.getOpcode() == RX::SELECT && "unexpected custom inserter");
   const TargetInstrInfo &TII = *BB->getParent()->getSubtarget().getInstrInfo();
   DebugLoc DL = MI.getDebugLoc();
+
+  // emul / emulu Rs, Rd write the 64-bit product to the pair Rd+1:Rd, which
+  // no register class describes; use R5:R4 and let the register allocator
+  // coalesce the copies.
+  if (MI.getOpcode() == RX::SMUL_LOHI_P || MI.getOpcode() == RX::UMUL_LOHI_P) {
+    unsigned Opc =
+        MI.getOpcode() == RX::SMUL_LOHI_P ? RX::EMUL_rr : RX::EMULU_rr;
+    BuildMI(*BB, MI, DL, TII.get(TargetOpcode::COPY), RX::R4)
+        .addReg(MI.getOperand(2).getReg());
+    BuildMI(*BB, MI, DL, TII.get(Opc), RX::R4)
+        .addReg(RX::R4)
+        .addReg(MI.getOperand(3).getReg())
+        .addReg(RX::R5, RegState::ImplicitDefine);
+    BuildMI(*BB, MI, DL, TII.get(TargetOpcode::COPY),
+            MI.getOperand(0).getReg())
+        .addReg(RX::R4);
+    BuildMI(*BB, MI, DL, TII.get(TargetOpcode::COPY),
+            MI.getOperand(1).getReg())
+        .addReg(RX::R5);
+    MI.eraseFromParent();
+    return BB;
+  }
+
+  assert(MI.getOpcode() == RX::SELECT && "unexpected custom inserter");
 
   // ThisMBB:
   //   bcc CC, SinkMBB      ; take the true value

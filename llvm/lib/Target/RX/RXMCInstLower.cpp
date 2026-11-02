@@ -91,6 +91,9 @@ void RXMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
       MCOp = lowerSymbolOperand(
           MO, Printer.GetBlockAddressSymbol(MO.getBlockAddress()));
       break;
+    case MachineOperand::MO_JumpTableIndex:
+      MCOp = lowerSymbolOperand(MO, Printer.GetJTISymbol(MO.getIndex()));
+      break;
     case MachineOperand::MO_RegisterMask:
       continue;
     default:
