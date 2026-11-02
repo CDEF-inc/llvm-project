@@ -58,6 +58,12 @@ static unsigned getMemOpcode(unsigned Opc) {
   case RX::STI_B: return RX::MOV_B_mi16_b8;
   case RX::STI_W: return RX::MOV_W_mi16_w16;
   case RX::STI_L: return RX::MOV_L_mi16_i32;
+  case RX::FADD_mP: return RX::FADD_m16;
+  case RX::FSUB_mP: return RX::FSUB_m16;
+  case RX::FMUL_mP: return RX::FMUL_m16;
+  case RX::FDIV_mP: return RX::FDIV_m16;
+  case RX::FCMP_mP: return RX::FCMP_m16;
+  case RX::FSQRT_mP: return RX::FSQRT_m16;
   default: return Opc;
   }
 }
@@ -166,6 +172,22 @@ const MemFamily MemFamilies[] = {
     {RX::MOV_L_st16, RX::MOV_L_st0, RX::MOV_L_st5, RX::MOV_L_st8, 4, true},
 };
 
+// FPU operations with a long-word memory source by displacement size:
+// dsp:16, [Rs], dsp:8. The base and the displacement are the last two
+// operands.
+struct FPUMemFamily {
+  unsigned D16, D0, D8;
+};
+
+const FPUMemFamily FPUMemFamilies[] = {
+    {RX::FADD_m16, RX::FADD_m0, RX::FADD_m8},
+    {RX::FSUB_m16, RX::FSUB_m0, RX::FSUB_m8},
+    {RX::FMUL_m16, RX::FMUL_m0, RX::FMUL_m8},
+    {RX::FDIV_m16, RX::FDIV_m0, RX::FDIV_m8},
+    {RX::FCMP_m16, RX::FCMP_m0, RX::FCMP_m8},
+    {RX::FSQRT_m16, RX::FSQRT_m0, RX::FSQRT_m8},
+};
+
 // 3-operand register forms and their 2-operand equivalents.
 struct RRRFamily {
   unsigned RRR, RR;
@@ -178,6 +200,9 @@ const RRRFamily RRRFamilies[] = {
     {RX::AND_rrr, RX::AND_rr, true},
     {RX::OR_rrr, RX::OR_rr, true},
     {RX::SUB_rrr, RX::SUB_rr, false},
+    {RX::FADD_rrr, RX::FADD_rr, true},
+    {RX::FMUL_rrr, RX::FMUL_rr, true},
+    {RX::FSUB_rrr, RX::FSUB_rr, false},
 };
 
 bool isLowReg(MCRegister Reg) {
@@ -261,6 +286,22 @@ bool shrinkMem(MCInst &Inst) {
       Inst.setOpcode(F.D5);
     else if (Scaled <= 255)
       Inst.setOpcode(F.D8);
+    return true;
+  }
+  return false;
+}
+
+bool shrinkFPUMem(MCInst &Inst) {
+  for (const FPUMemFamily &F : FPUMemFamilies) {
+    if (Inst.getOpcode() != F.D16)
+      continue;
+    int64_t Dsp = Inst.getOperand(Inst.getNumOperands() - 1).getImm();
+    if (Dsp == 0) {
+      Inst.erase(Inst.end() - 1);
+      Inst.setOpcode(F.D0);
+    } else if (Dsp / 4 <= 255) {
+      Inst.setOpcode(F.D8);
+    }
     return true;
   }
   return false;
@@ -360,5 +401,6 @@ bool shrinkShift(MCInst &Inst) {
 
 void llvm::shrinkRXInst(MCInst &Inst) {
   shrinkImm(Inst) || shrinkAddImm(Inst) || shrinkMem(Inst) ||
-      shrinkMovImm(Inst) || shrinkRRR(Inst) || shrinkShift(Inst);
+      shrinkFPUMem(Inst) || shrinkMovImm(Inst) || shrinkRRR(Inst) ||
+      shrinkShift(Inst);
 }
