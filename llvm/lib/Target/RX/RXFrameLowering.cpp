@@ -302,9 +302,11 @@ MachineBasicBlock::iterator RXFrameLowering::eliminateCallFramePseudoInstr(
     MachineBasicBlock::iterator I) const {
   // The outgoing argument area is reserved in the prologue, except in a
   // function with dynamic allocas: there SP moves, so each call allocates
-  // its area (add #-N, r0 before it, add #N, r0 after it).
+  // its area (add #-N, r0 before it, add #N, r0 after it). N is rounded up
+  // to the stack alignment: a byval argument takes its own size, so the
+  // arguments may end at an odd offset.
   if (!hasReservedCallFrame(MF)) {
-    int64_t Amount = I->getOperand(0).getImm();
+    int64_t Amount = alignTo(I->getOperand(0).getImm(), getStackAlign());
     if (Amount) {
       if (I->getOpcode() == RX::ADJCALLSTACKDOWN)
         Amount = -Amount;
