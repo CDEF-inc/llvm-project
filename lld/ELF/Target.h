@@ -214,6 +214,7 @@ void setLoongArchTargetInfo(Ctx &);
 void setMSP430TargetInfo(Ctx &);
 void setMipsTargetInfo(Ctx &);
 void setPPC64TargetInfo(Ctx &);
+void setRXTargetInfo(Ctx &);
 void setPPCTargetInfo(Ctx &);
 void setRISCVTargetInfo(Ctx &);
 void setSPARCV9TargetInfo(Ctx &);

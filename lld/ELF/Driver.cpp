@@ -178,6 +178,7 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(Ctx &ctx,
           .Case("elf64loongarch", {ELF64LEKind, EM_LOONGARCH})
           .Case("elf64_s390", {ELF64BEKind, EM_S390})
           .Case("hexagonelf", {ELF32LEKind, EM_HEXAGON})
+          .Case("elf32rx", {ELF32LEKind, EM_RX})
           .Default({ELFNoneKind, EM_NONE});
 
   if (ret.first == ELFNoneKind)
@@ -2171,6 +2172,12 @@ void LinkerDriver::loadFiles() {
           if (mm == file_magic::elf_relocatable || mm == file_magic::bitcode ||
               job.inWholeArchive)
             job.out.push_back(makeFile(mb, mm, job.path, offset, lazy));
+          // rustc keeps a crate's metadata in a Rust library (an archive) as
+          // lib.rmeta (and lib.rmeta-link); for targets its object writer
+          // does not know (such as RX) they are raw metadata, which the link
+          // ignores.
+          else if (mb.getBufferIdentifier().starts_with("lib.rmeta"))
+            continue;
           else
             Warn(ctx) << job.path << ": archive member '"
                       << mb.getBufferIdentifier()
