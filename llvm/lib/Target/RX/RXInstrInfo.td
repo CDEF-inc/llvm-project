@@ -2801,12 +2801,14 @@ def : Pat<(RXcall texternalsym:$dst), (BSR_call texternalsym:$dst)>;
 def : Pat<(RXcall GPR:$rs), (JSR GPR:$rs)>;
 def : Pat<(RXretglue), (RTS)>;
 def : Pat<(br bb:$dst), (BRA_A bb:$dst)>;
+def : Pat<(brind GPR:$rs), (JMP GPR:$rs)>;
 
 // Constants and addresses.
 def : Pat<(i32 imm:$imm), (MOV_L_ri32 imm:$imm)>;
 def : Pat<(RXWrapper tglobaladdr:$a), (MOV_L_ri32 tglobaladdr:$a)>;
 def : Pat<(RXWrapper texternalsym:$a), (MOV_L_ri32 texternalsym:$a)>;
 def : Pat<(RXWrapper tblockaddress:$a), (MOV_L_ri32 tblockaddress:$a)>;
+def : Pat<(RXWrapper tjumptable:$a), (MOV_L_ri32 tjumptable:$a)>;
 
 // Loads and stores. The pseudos take a (base, dsp) memory operand so that
 // the AddrX complex patterns can fill it; RXMCInstLower turns them into the
