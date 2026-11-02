@@ -65,15 +65,16 @@ private:
   SDValue lowerExternalSymbol(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerFPToInt(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVASTART(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFPArith(SDValue Op, SelectionDAG &DAG) const;
-  bool canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond, SDNodeFlags Flags,
+  bool canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
                            const SelectionDAG &DAG) const;
   SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
-                  SDNodeFlags Flags, RXCC::CondCode &CC, const SDLoc &DL,
+                  RXCC::CondCode &CC, const SDLoc &DL,
                   SelectionDAG &DAG) const;
 
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,

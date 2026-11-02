@@ -22,14 +22,23 @@ def FeatureDFPU
     : SubtargetFeature<"dfpu", "HasDFPU", "true",
                        "Enable double-precision FPU (DR0-DR15)">;
 // The single-precision FPU (GCC -mfpu). Some RXv1 parts (RX100, RX200) do
-// not have it. It does not handle NaNs, infinities or denormals the IEEE
-// way, so code generation uses it only for operations marked nnan and ninf
-// in functions that allow denormals to be flushed
-// (denormal_fpenv(preservesign)), and for integer-to-float conversions; the
-// others stay soft-float.
+// not have it. It handles NaNs and infinities the IEEE way but flushes
+// denormal operands and results to zero (FPSW.DN = 1) or traps on them, so
+// code generation uses it (and the DFPU) only in functions that allow
+// denormals to be flushed (denormal_fpenv(preservesign), or flush-denormals
+// below), and for integer-to-float conversions; the others stay soft-float.
 def FeatureFPU
     : SubtargetFeature<"fpu", "HasFPU", "true",
-                       "Use the single-precision FPU for fast-math code">;
+                       "Use the single-precision FPU">;
+// Denormals may be flushed to a zero of the same sign in every function, as
+// the FPU and DFPU do with FPSW.DN / DPSW.DDN = 1 (the reset value): float
+// and double arithmetic, compares and conversions use them. For frontends
+// that cannot set the denormal environment (rustc's
+// -C target-feature=+flush-denormals); off by default (IEEE soft-float).
+def FeatureFlushDenormals
+    : SubtargetFeature<"flush-denormals", "FlushDenormals", "true",
+                       "Allow denormals to be flushed to zero everywhere, "
+                       "so that the FPU / DFPU can be used">;
 // GCC -m64bit-doubles: double is 64 bits. Recorded in e_flags; GNU ld
 // refuses to mix objects that disagree.
 def Feature64BitDoubles
