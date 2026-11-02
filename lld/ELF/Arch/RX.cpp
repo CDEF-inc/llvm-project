@@ -244,7 +244,7 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     return;
   case R_RX_OPneg:
   case R_RX_OPnot: {
-    int32_t a = pop(ctx, loc, rel);
+    uint32_t a = pop(ctx, loc, rel);
     rxStack.push_back(rel.type == R_RX_OPneg ? -a : ~a);
     return;
   }
@@ -259,22 +259,35 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_RX_OPxor:
   case R_RX_OPmod: {
     // GNU ld pops the top (t) and then the next (n); only OPsub computes
-    // n op t, the others t op n.
+    // n op t, the others t op n. The values are 32-bit and wrap around
+    // (GNU ld's int32_t arithmetic, without its undefined behaviour), so
+    // INT32_MIN / -1 is INT32_MIN and INT32_MIN % -1 is 0.
     int32_t t = pop(ctx, loc, rel), n = pop(ctx, loc, rel), r = 0;
+    uint32_t ut = t, un = n;
     switch (rel.type) {
-    case R_RX_OPadd: r = t + n; break;
-    case R_RX_OPsub: r = n - t; break;
-    case R_RX_OPmul: r = t * n; break;
+    case R_RX_OPadd: r = ut + un; break;
+    case R_RX_OPsub: r = un - ut; break;
+    case R_RX_OPmul: r = ut * un; break;
     case R_RX_OPdiv:
     case R_RX_OPmod:
       if (n == 0) {
         Err(ctx) << getErrorLoc(ctx, loc) << rel.type << ": division by zero";
         break;
       }
-      r = rel.type == R_RX_OPdiv ? t / n : t % n;
+      if (n == -1)
+        r = rel.type == R_RX_OPdiv ? -ut : 0;
+      else
+        r = rel.type == R_RX_OPdiv ? t / n : t % n;
       break;
-    case R_RX_OPshla: r = t << n; break;
-    case R_RX_OPshra: r = t >> n; break;
+    case R_RX_OPshla:
+    case R_RX_OPshra:
+      if (n < 0 || n > 31) {
+        Err(ctx) << getErrorLoc(ctx, loc) << rel.type << ": shift count " << n
+                 << " is not in [0, 31]";
+        break;
+      }
+      r = rel.type == R_RX_OPshla ? ut << n : t >> n;
+      break;
     case R_RX_OPand: r = t & n; break;
     case R_RX_OPor: r = t | n; break;
     case R_RX_OPxor: r = t ^ n; break;
