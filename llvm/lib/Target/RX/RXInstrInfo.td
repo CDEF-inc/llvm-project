@@ -3025,6 +3025,44 @@ let Predicates = [HasFPU, HasRXv2] in {
 def : Pat<(fsqrt (f32 GPR:$a)), (FSQRT_rr GPR:$a)>;
 def : Pat<(f32 (uint_to_fp (i32 GPR:$a))), (UTOF_rr GPR:$a)>;
 }
+// The RXv2 3-operand forms are as short as the 2-operand ones and need no
+// copy when both sources stay live; RXMCInstLower uses the 2-operand form
+// when the destination is a source.
+let Predicates = [HasFPU, HasRXv2], AddedComplexity = 1 in {
+def : Pat<(fadd (f32 GPR:$a), (f32 GPR:$b)), (FADD_rrr GPR:$a, GPR:$b)>;
+def : Pat<(fsub (f32 GPR:$a), (f32 GPR:$b)), (FSUB_rrr GPR:$b, GPR:$a)>;
+def : Pat<(fmul (f32 GPR:$a), (f32 GPR:$b)), (FMUL_rrr GPR:$a, GPR:$b)>;
+}
+
+// A memory source: the pseudos take a (base, dsp) memory operand like LD_L;
+// RXMCInstLower turns them into the dsp:16 forms and picks the shortest
+// displacement.
+let Size = 5, mayLoad = 1, Uses = [FPSW], Defs = [PSW, FPSW] in {
+let Constraints = "$src = $rd" in {
+def FADD_mP : RXPseudo<(outs GPR:$rd), (ins GPR:$src, mem:$a)>;
+def FSUB_mP : RXPseudo<(outs GPR:$rd), (ins GPR:$src, mem:$a)>;
+def FMUL_mP : RXPseudo<(outs GPR:$rd), (ins GPR:$src, mem:$a)>;
+def FDIV_mP : RXPseudo<(outs GPR:$rd), (ins GPR:$src, mem:$a)>;
+}
+def FCMP_mP : RXPseudo<(outs), (ins GPR:$rd, mem:$a)>;
+let Predicates = [HasRXv2] in
+def FSQRT_mP : RXPseudo<(outs GPR:$rd), (ins mem:$a)>;
+}
+
+let Predicates = [HasFPU] in {
+def : Pat<(fadd (f32 GPR:$a), (f32 (load AddrL:$m))),
+          (FADD_mP GPR:$a, AddrL:$m)>;
+def : Pat<(fsub (f32 GPR:$a), (f32 (load AddrL:$m))),
+          (FSUB_mP GPR:$a, AddrL:$m)>;
+def : Pat<(fmul (f32 GPR:$a), (f32 (load AddrL:$m))),
+          (FMUL_mP GPR:$a, AddrL:$m)>;
+def : Pat<(fdiv (f32 GPR:$a), (f32 (load AddrL:$m))),
+          (FDIV_mP GPR:$a, AddrL:$m)>;
+def : Pat<(RXfcmp (f32 GPR:$a), (f32 (load AddrL:$m))),
+          (FCMP_mP GPR:$a, AddrL:$m)>;
+}
+let Predicates = [HasFPU, HasRXv2] in
+def : Pat<(fsqrt (f32 (load AddrL:$m))), (FSQRT_mP AddrL:$m)>;
 
 //===----------------------------------------------------------------------===//
 // Double precision with the DFPU (+dfpu)

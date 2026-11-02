@@ -72,6 +72,12 @@ static unsigned getAccessScale(unsigned Opc) {
   case RX::LD_L:
   case RX::ST_L:
   case RX::STI_L:
+  case RX::FADD_mP:
+  case RX::FSUB_mP:
+  case RX::FMUL_mP:
+  case RX::FDIV_mP:
+  case RX::FCMP_mP:
+  case RX::FSQRT_mP:
     return 4;
   default:
     return 1;
