@@ -378,10 +378,13 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
   }
   case ISD::FP_EXTEND: {
     // ftod is exact except that it flushes a denormal float; NaNs are
-    // excluded since their payloads may differ from the libcall's.
+    // excluded since their payloads may differ from the libcall's. Being a
+    // DFPU instruction, it treats the denormal float by DPSW.DDN (it traps
+    // with DDN = 0), so the double environment must allow flushing too.
     SDValue Src = N->getOperand(0);
     if (Src.getValueType() != MVT::f32 || N->getValueType(0) != MVT::f64 ||
-        !N->getFlags().hasNoNaNs() || !flushesDenormals(DAG, MVT::f32))
+        !N->getFlags().hasNoNaNs() || !flushesDenormals(DAG, MVT::f32) ||
+        !flushesDenormals(DAG, MVT::f64))
       return SDValue();
     return fromDR(DAG.getNode(RXISD::FTOD, DL, MVT::Untyped,
                               DAG.getBitcast(MVT::i32, Src)),
