@@ -127,8 +127,8 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   }
 
   // double with the DFPU: it stays soft-float (in register pairs, as the ABI
-  // passes it), and fast-math operations and integer-to-double conversions
-  // are replaced before type legalization by DFPU sequences (see
+  // passes it), and fast-math operations and conversions are replaced before
+  // type legalization by DFPU instructions on DR registers (see
   // PerformDAGCombine). Like the FPU, the DFPU flushes or traps on denormals
   // (DPSW.DDN), so only operations marked nnan and ninf in functions whose
   // double denormal environment is preserve-sign use it (canUseFPU);
@@ -138,7 +138,9 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
   if (STI.hasDFPU()) {
     setTargetDAGCombine({ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV,
                          ISD::FSQRT, ISD::SINT_TO_FP, ISD::UINT_TO_FP,
-                         ISD::SETCC, ISD::BR_CC, ISD::SELECT_CC});
+                         ISD::FP_TO_SINT, ISD::FP_TO_UINT, ISD::FP_EXTEND,
+                         ISD::FP_ROUND, ISD::SETCC, ISD::BR_CC,
+                         ISD::SELECT_CC});
     setOperationAction(ISD::BR_CC, MVT::f64, Custom);
   }
 
@@ -289,17 +291,43 @@ static bool isDFPUOperand(SDValue V, SDNodeFlags Flags,
   return V.getValueType() == MVT::f64 && canUseFPU(Flags, DAG, MVT::f64);
 }
 
-// double (+dfpu), before type legalization: DFPU sequences for fast-math
-// arithmetic and compares and for integer-to-double conversions, working on
-// the two words of each double. Everything else is left to the default
-// soft-float expansion.
+static bool flushesDenormals(const SelectionDAG &DAG, EVT VT) {
+  return DAG.getMachineFunction().getDenormalMode(VT.getFltSemantics()) ==
+         DenormalMode::getPreserveSign();
+}
+
+// A double in a DR register (an untyped value), from its two words, and
+// back.
+static SDValue toDR(SDValue V, const SDLoc &DL, SelectionDAG &DAG) {
+  auto [Lo, Hi] = splitF64(V, DL, DAG);
+  return DAG.getNode(RXISD::DR_PAIR, DL, MVT::Untyped, Lo, Hi);
+}
+
+static SDValue fromDR(SDValue D, const SDLoc &DL, SelectionDAG &DAG) {
+  return joinF64(DAG.getNode(RXISD::DR_SPLIT, DL,
+                             DAG.getVTList(MVT::i32, MVT::i32), D),
+                 DL, DAG);
+}
+
+// double (+dfpu), before type legalization: DFPU instructions on DR
+// registers for fast-math arithmetic and compares, integer-to-double
+// conversions and, where the result is the IEEE one, the other conversions
+// (see below). Everything else is left to the default soft-float expansion.
+// In every phase, DR_PAIR(DR_SPLIT(d)) folds to d, so that a double computed
+// by the DFPU and used by it stays in its DR register.
 SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
                                             DAGCombinerInfo &DCI) const {
-  if (!DCI.isBeforeLegalize())
-    return SDValue();
   SelectionDAG &DAG = DCI.DAG;
   SDLoc DL(N);
-  SDVTList Pair = DAG.getVTList(MVT::i32, MVT::i32);
+  if (N->getOpcode() == RXISD::DR_PAIR) {
+    SDValue Lo = N->getOperand(0), Hi = N->getOperand(1);
+    if (Lo.getOpcode() == RXISD::DR_SPLIT && Hi.getNode() == Lo.getNode() &&
+        Lo.getResNo() == 0 && Hi.getResNo() == 1)
+      return Lo.getOperand(0);
+    return SDValue();
+  }
+  if (!DCI.isBeforeLegalize())
+    return SDValue();
   switch (N->getOpcode()) {
   case ISD::FADD:
   case ISD::FSUB:
@@ -311,27 +339,67 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
                   : N->getOpcode() == ISD::FSUB ? 1
                   : N->getOpcode() == ISD::FMUL ? 2
                                                 : 5;
-    auto [ALo, AHi] = splitF64(N->getOperand(0), DL, DAG);
-    auto [BLo, BHi] = splitF64(N->getOperand(1), DL, DAG);
-    return joinF64(DAG.getNode(RXISD::DARITH, DL, Pair,
-                               DAG.getTargetConstant(Op, DL, MVT::i32), ALo,
-                               AHi, BLo, BHi),
-                   DL, DAG);
+    return fromDR(DAG.getNode(RXISD::DARITH, DL, MVT::Untyped,
+                              DAG.getTargetConstant(Op, DL, MVT::i32),
+                              toDR(N->getOperand(0), DL, DAG),
+                              toDR(N->getOperand(1), DL, DAG)),
+                  DL, DAG);
   }
   case ISD::FSQRT: {
     if (!isDFPUOperand(SDValue(N, 0), N->getFlags(), DAG))
       return SDValue();
-    auto [Lo, Hi] = splitF64(N->getOperand(0), DL, DAG);
-    return joinF64(DAG.getNode(RXISD::DSQRT, DL, Pair, Lo, Hi), DL, DAG);
+    return fromDR(DAG.getNode(RXISD::DSQRT, DL, MVT::Untyped,
+                              toDR(N->getOperand(0), DL, DAG)),
+                  DL, DAG);
   }
   case ISD::SINT_TO_FP:
   case ISD::UINT_TO_FP: {
+    // Exact for any input.
     SDValue Src = N->getOperand(0);
     if (N->getValueType(0) != MVT::f64 || Src.getValueType() != MVT::i32)
       return SDValue();
     unsigned Opc =
         N->getOpcode() == ISD::SINT_TO_FP ? RXISD::ITOD : RXISD::UTOD;
-    return joinF64(DAG.getNode(Opc, DL, Pair, Src), DL, DAG);
+    return fromDR(DAG.getNode(Opc, DL, MVT::Untyped, Src), DL, DAG);
+  }
+  case ISD::FP_TO_SINT:
+  case ISD::FP_TO_UINT: {
+    // dtoi / dtou truncate like fptosi / fptoui; a result out of range (or
+    // from a NaN) is poison anyway. A denormal becomes 0 either way, but
+    // traps with DPSW.DDN = 0, so the double environment must allow
+    // flushing.
+    SDValue Src = N->getOperand(0);
+    if (Src.getValueType() != MVT::f64 || N->getValueType(0) != MVT::i32 ||
+        !flushesDenormals(DAG, MVT::f64))
+      return SDValue();
+    unsigned Opc =
+        N->getOpcode() == ISD::FP_TO_SINT ? RXISD::DTOI : RXISD::DTOU;
+    return DAG.getNode(Opc, DL, MVT::i32, toDR(Src, DL, DAG));
+  }
+  case ISD::FP_EXTEND: {
+    // ftod is exact except that it flushes a denormal float; NaNs are
+    // excluded since their payloads may differ from the libcall's. Being a
+    // DFPU instruction, it treats the denormal float by DPSW.DDN (it traps
+    // with DDN = 0), so the double environment must allow flushing too.
+    SDValue Src = N->getOperand(0);
+    if (Src.getValueType() != MVT::f32 || N->getValueType(0) != MVT::f64 ||
+        !N->getFlags().hasNoNaNs() || !flushesDenormals(DAG, MVT::f32) ||
+        !flushesDenormals(DAG, MVT::f64))
+      return SDValue();
+    return fromDR(DAG.getNode(RXISD::FTOD, DL, MVT::Untyped,
+                              DAG.getBitcast(MVT::i32, Src)),
+                  DL, DAG);
+  }
+  case ISD::FP_ROUND: {
+    // dtof rounds to nearest (DPSW.RM = 0) like the libcall, overflows to
+    // an infinity, and flushes denormal operands and results.
+    SDValue Src = N->getOperand(0);
+    if (Src.getValueType() != MVT::f64 || N->getValueType(0) != MVT::f32 ||
+        !N->getFlags().hasNoNaNs() || !flushesDenormals(DAG, MVT::f64) ||
+        !flushesDenormals(DAG, MVT::f32))
+      return SDValue();
+    return DAG.getBitcast(MVT::f32, DAG.getNode(RXISD::DTOF, DL, MVT::i32,
+                                                toDR(Src, DL, DAG)));
   }
   case ISD::SETCC:
   case ISD::SELECT_CC: {
@@ -399,11 +467,9 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
     default:
       llvm_unreachable("unexpected double condition");
     }
-    auto [XLo, XHi] = splitF64(X, DL, DAG);
-    auto [YLo, YHi] = splitF64(Y, DL, DAG);
     return DAG.getNode(RXISD::DCMP, DL, MVT::Glue,
-                       DAG.getTargetConstant(CM, DL, MVT::i32), XLo, XHi, YLo,
-                       YHi);
+                       DAG.getTargetConstant(CM, DL, MVT::i32),
+                       toDR(X, DL, DAG), toDR(Y, DL, DAG));
   }
 
   if (LHS.getValueType() == MVT::f32) {

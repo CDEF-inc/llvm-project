@@ -44,6 +44,7 @@ private:
   void Select(SDNode *N) override;
   bool selectIndexedLoad(LoadSDNode *LD);
   bool selectIndexedStore(StoreSDNode *ST);
+  bool selectDFPU(SDNode *Node);
 
   bool selectAddr(SDValue Addr, SDValue &Base, SDValue &Disp, unsigned Scale);
   bool SelectAddrB(SDValue Addr, SDValue &Base, SDValue &Disp) {
@@ -201,5 +202,62 @@ void RXDAGToDAGISel::Select(SDNode *Node) {
     return;
   }
 
+  if (selectDFPU(Node))
+    return;
+
   SelectCode(Node);
+}
+
+// The DFPU nodes (see RXInstrInfo.td), whose DR values are untyped and so
+// have no patterns. For the three-operand operations the second source is
+// the left-hand side (DSUB src, src2, dest: dest = src2 - src).
+bool RXDAGToDAGISel::selectDFPU(SDNode *Node) {
+  SDLoc DL(Node);
+  auto Op = [&](unsigned I) { return Node->getOperand(I); };
+  unsigned Opc;
+  switch (Node->getOpcode()) {
+  case RXISD::DR_PAIR:
+    CurDAG->SelectNodeTo(Node, RX::DR_PAIR_P, MVT::Untyped, Op(0), Op(1));
+    return true;
+  case RXISD::DR_SPLIT:
+    CurDAG->SelectNodeTo(Node, RX::DR_SPLIT_P, MVT::i32, MVT::i32, Op(0));
+    return true;
+  case RXISD::DARITH:
+    switch (Node->getConstantOperandVal(0)) {
+    case 0: Opc = RX::DADD; break;
+    case 1: Opc = RX::DSUB; break;
+    case 2: Opc = RX::DMUL; break;
+    case 5: Opc = RX::DDIV; break;
+    default: llvm_unreachable("unexpected DFPU operation");
+    }
+    CurDAG->SelectNodeTo(Node, Opc, MVT::Untyped, Op(2), Op(1));
+    return true;
+  case RXISD::DSQRT:
+    CurDAG->SelectNodeTo(Node, RX::DSQRT, MVT::Untyped, Op(0));
+    return true;
+  case RXISD::ITOD:
+  case RXISD::UTOD:
+  case RXISD::FTOD:
+    Opc = Node->getOpcode() == RXISD::ITOD   ? RX::ITOD
+          : Node->getOpcode() == RXISD::UTOD ? RX::UTOD
+                                             : RX::FTOD;
+    CurDAG->SelectNodeTo(Node, Opc, MVT::Untyped, Op(0));
+    return true;
+  case RXISD::DTOI:
+  case RXISD::DTOU:
+  case RXISD::DTOF: {
+    // The result is the low word of the destination DR register.
+    Opc = Node->getOpcode() == RXISD::DTOI   ? RX::DTOI
+          : Node->getOpcode() == RXISD::DTOU ? RX::DTOU
+                                             : RX::DTOF;
+    SDNode *D = CurDAG->getMachineNode(Opc, DL, MVT::Untyped, Op(0));
+    CurDAG->SelectNodeTo(Node, RX::DR_LO_P, MVT::i32, SDValue(D, 0));
+    return true;
+  }
+  case RXISD::DCMP:
+    CurDAG->SelectNodeTo(Node, RX::DCMP_P, MVT::Glue, Op(0), Op(1), Op(2));
+    return true;
+  default:
+    return false;
+  }
 }

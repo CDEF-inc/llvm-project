@@ -35,9 +35,14 @@ void RXInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                               const DebugLoc &DL, Register DestReg,
                               Register SrcReg, bool KillSrc,
                               bool RenamableDest, bool RenamableSrc) const {
-  if (!RX::GPRRegClass.contains(DestReg, SrcReg))
+  unsigned Opc;
+  if (RX::GPRRegClass.contains(DestReg, SrcReg))
+    Opc = RX::MOV_L_rr;
+  else if (RX::DPRRegClass.contains(DestReg, SrcReg))
+    Opc = RX::DMOV_D_rr;
+  else
     llvm_unreachable("RX: unsupported register copy");
-  BuildMI(MBB, I, DL, get(RX::MOV_L_rr), DestReg)
+  BuildMI(MBB, I, DL, get(Opc), DestReg)
       .addReg(SrcReg, getKillRegState(KillSrc));
 }
 
@@ -55,8 +60,9 @@ void RXInstrInfo::storeRegToStackSlot(
       MachineMemOperand::MOStore, MFI.getObjectSize(FrameIdx),
       MFI.getObjectAlign(FrameIdx));
 
-  assert(RC == &RX::GPRRegClass && "RX: cannot spill this register class");
-  BuildMI(MBB, MI, DL, get(RX::ST_L))
+  assert((RC == &RX::GPRRegClass || RC == &RX::DPRRegClass) &&
+         "RX: cannot spill this register class");
+  BuildMI(MBB, MI, DL, get(RC == &RX::DPRRegClass ? RX::DST_D : RX::ST_L))
       .addReg(SrcReg, getKillRegState(isKill))
       .addFrameIndex(FrameIdx)
       .addImm(0)
@@ -80,8 +86,10 @@ void RXInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
       MachineMemOperand::MOLoad, MFI.getObjectSize(FrameIdx),
       MFI.getObjectAlign(FrameIdx));
 
-  assert(RC == &RX::GPRRegClass && "RX: cannot reload this register class");
-  BuildMI(MBB, MI, DL, get(RX::LD_L), DestReg)
+  assert((RC == &RX::GPRRegClass || RC == &RX::DPRRegClass) &&
+         "RX: cannot reload this register class");
+  BuildMI(MBB, MI, DL, get(RC == &RX::DPRRegClass ? RX::DLD_D : RX::LD_L),
+          DestReg)
       .addFrameIndex(FrameIdx)
       .addImm(0)
       .addMemOperand(MMO)
