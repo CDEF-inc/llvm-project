@@ -35,6 +35,9 @@ RXTargetMachine::RXTargetMachine(const Target &T, const Triple &TT,
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
       Subtarget(TT, std::string(CPU), std::string(FS), *this) {
   initAsmInfo();
+  // Remember / restore the CFI state around epilogues that are not at the
+  // end of the function (RXFrameLowering::emitEpilogue).
+  setCFIFixup(true);
 }
 
 RXTargetMachine::~RXTargetMachine() = default;

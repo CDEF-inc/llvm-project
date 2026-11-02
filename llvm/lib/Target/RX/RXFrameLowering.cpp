@@ -64,9 +64,7 @@ void RXFrameLowering::emitPrologue(MachineFunction &MF,
          (MBBI->getOpcode() == RX::PUSH_L || MBBI->getOpcode() == RX::PUSHM))
     ++MBBI;
 
-  // The CFA is SP + 4 on entry (createRXMCAsmInfo). Only the prologue is
-  // described, as GCC does; the epilogue moves SP only in its last one or
-  // two instructions.
+  // The CFA is SP + 4 on entry (createRXMCAsmInfo).
   bool NeedsCFI = MF.needsFrameMoves();
   CFIInstBuilder CFIBuilder(MBB, MBBI, MachineInstr::FrameSetup);
   uint64_t RegBytes = FI->getCalleeSavedFrameSize();
@@ -111,18 +109,26 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
     }
   }
 
-  uint64_t NumBytes = MFI.getStackSize() - FI->getCalleeSavedFrameSize();
+  uint64_t RegBytes = FI->getCalleeSavedFrameSize();
+  uint64_t NumBytes = MFI.getStackSize() - RegBytes;
+
+  // The CFI follows each instruction that moves SP but does not return.
+  // CFIFixup puts .cfi_remember_state / .cfi_restore_state around an
+  // epilogue that is not at the end of the function.
+  bool NeedsCFI = MF.needsFrameMoves();
 
   // rtsd #imm, lo-hi frees imm bytes, the registers included, then pops
   // lo..hi and returns; rtsd #imm frees imm bytes and returns. imm is at
   // most 1020.
   if (Term != MBB.end() && Term->getOpcode() == RX::RTS) {
-    uint64_t RegBytes = FI->getCalleeSavedFrameSize();
     if (!Restore && NumBytes == 0)
       return;
     if (NumBytes + RegBytes > 1020) {
       adjustSP(MBB, MBBI, DL, TII, static_cast<int64_t>(NumBytes),
                MachineInstr::FrameDestroy);
+      if (NeedsCFI)
+        CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
+            .buildDefCFAOffset(4 + RegBytes);
       NumBytes = 0;
       if (!Restore)
         return;
@@ -150,9 +156,19 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
     return;
   }
 
-  if (NumBytes)
+  if (NumBytes) {
     adjustSP(MBB, MBBI, DL, TII, static_cast<int64_t>(NumBytes),
              MachineInstr::FrameDestroy);
+    if (NeedsCFI)
+      CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
+          .buildDefCFAOffset(4 + RegBytes);
+  }
+  if (Restore && NeedsCFI) {
+    CFIInstBuilder CFIBuilder(MBB, Term, MachineInstr::FrameDestroy);
+    CFIBuilder.buildDefCFAOffset(4);
+    for (const CalleeSavedInfo &I : MFI.getCalleeSavedInfo())
+      CFIBuilder.buildRestore(I.getReg());
+  }
 }
 
 void RXFrameLowering::determineCalleeSaves(MachineFunction &MF,
