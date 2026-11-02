@@ -2752,6 +2752,17 @@ def SELECT : RXPseudo<(outs GPR:$rd), (ins GPR:$t, GPR:$f, i32imm:$cc),
                             (RXselectcc (i32 GPR:$t), (i32 GPR:$f),
                                         imm:$cc))]>;
 
+// 32 x 32 -> 64 multiplies: emul / emulu, whose result is a register pair
+// (see EmitInstrWithCustomInserter).
+let usesCustomInserter = 1, isCommutable = 1 in {
+def SMUL_LOHI_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a, GPR:$b),
+                           [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                                 (smullohi (i32 GPR:$a), (i32 GPR:$b)))]>;
+def UMUL_LOHI_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a, GPR:$b),
+                           [(set (i32 GPR:$lo), (i32 GPR:$hi),
+                                 (umullohi (i32 GPR:$a), (i32 GPR:$b)))]>;
+}
+
 // Conditional branch on a condition code; lowered to b<cond>.b. Branch
 // relaxation inverts it around a bra.a when the target is out of range.
 let isBranch = 1, isTerminator = 1, Uses = [PSW], Size = 2 in
