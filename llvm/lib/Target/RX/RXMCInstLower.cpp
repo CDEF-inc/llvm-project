@@ -64,6 +64,8 @@ static unsigned getMemOpcode(unsigned Opc) {
   case RX::FDIV_mP: return RX::FDIV_m16;
   case RX::FCMP_mP: return RX::FCMP_m16;
   case RX::FSQRT_mP: return RX::FSQRT_m16;
+  case RX::DST_D: return RX::DMOV_D_st16;
+  case RX::DLD_D: return RX::DMOV_D_ld16;
   default: return Opc;
   }
 }
@@ -153,7 +155,8 @@ const ImmFamily ImmFamilies[] = {
 };
 
 // Memory accesses by displacement size: ld/st with dsp:16, [Rn], dsp:5
-// (R0-R7 only), dsp:8; Scale is the access size.
+// (R0-R7 only; 0 if there is none), dsp:8; Scale is the access size (4 for
+// dmov.d).
 struct MemFamily {
   unsigned D16, D0, D5, D8, Scale;
   bool IsStore;
@@ -170,6 +173,8 @@ const MemFamily MemFamilies[] = {
     {RX::MOV_B_st16, RX::MOV_B_st0, RX::MOV_B_st5, RX::MOV_B_st8, 1, true},
     {RX::MOV_W_st16, RX::MOV_W_st0, RX::MOV_W_st5, RX::MOV_W_st8, 2, true},
     {RX::MOV_L_st16, RX::MOV_L_st0, RX::MOV_L_st5, RX::MOV_L_st8, 4, true},
+    {RX::DMOV_D_ld16, RX::DMOV_D_ld0, 0, RX::DMOV_D_ld8, 4, false},
+    {RX::DMOV_D_st16, RX::DMOV_D_st0, 0, RX::DMOV_D_st8, 4, true},
 };
 
 // FPU operations with a long-word memory source by displacement size:
@@ -281,7 +286,7 @@ bool shrinkMem(MCInst &Inst) {
     int64_t Scaled = Dsp / F.Scale;
     if (Dsp == 0)
       setOpcodeAndOperands(Inst, F.D0, {Data, Base});
-    else if (Scaled <= 31 && isLowReg(Data.getReg()) &&
+    else if (F.D5 && Scaled <= 31 && isLowReg(Data.getReg()) &&
              isLowReg(Base.getReg()))
       Inst.setOpcode(F.D5);
     else if (Scaled <= 255)

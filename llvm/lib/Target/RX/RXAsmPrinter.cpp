@@ -23,6 +23,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 
@@ -46,10 +47,9 @@ public:
     case RX::CMPXCHG32:
       emitCmpXchg(*MI);
       return;
-    case RX::DARITH_P:
-    case RX::DSQRT_P:
-    case RX::ITOD_P:
-    case RX::UTOD_P:
+    case RX::DR_PAIR_P:
+    case RX::DR_SPLIT_P:
+    case RX::DR_LO_P:
     case RX::DCMP_P:
       emitDFPU(*MI);
       return;
@@ -103,60 +103,37 @@ private:
   void emitDFPU(const MachineInstr &MI);
 };
 
-// The DFPU pseudos (see RXInstrInfo.td) on soft-float doubles in register
-// pairs, with DR0 / DR1 as scratch. DMOV.L to DRLn / DRHn writes the low /
-// high word of DRn. For the three-operand operations and DCMPcm the second
-// operand is the left-hand side (DSUB src, src2, dest: dest = src2 - src).
+// The DFPU pseudos (see RXInstrInfo.td). DMOV.L to or from DRLn / DRHn
+// moves the low / high word of DRn.
 //
-//   DARITH_P lo, hi, op, alo, ahi, blo, bhi:
-//     dmov.l alo, drl0 / dmov.l ahi, drh0 / dmov.l blo, drl1 /
-//     dmov.l bhi, drh1 / d<op> dr1, dr0, dr0 / dmov.l drl0, lo /
-//     dmov.l drh0, hi
-//   DSQRT_P lo, hi, alo, ahi:  a -> dr0, dsqrt dr0, dr0, dr0 -> lo, hi
-//   ITOD_P / UTOD_P lo, hi, a: itod / utod a, dr0, dr0 -> lo, hi
-//   DCMP_P cm, xlo, xhi, ylo, yhi:
-//     x -> dr0, y -> dr1, dcmp<cm> dr1, dr0 (RES = x cm y), mvfdr (Z = RES)
+//   DR_PAIR_P d, lo, hi:   dmov.l lo, drlN / dmov.l hi, drhN
+//   DR_SPLIT_P lo, hi, d:  dmov.l drlN, lo / dmov.l drhN, hi
+//   DR_LO_P r, d:          dmov.l drlN, r
+//   DCMP_P cm, x, y:       dcmp<cm> y, x (RES = x cm y) / mvfdr (Z = RES)
 void RXAsmPrinter::emitDFPU(const MachineInstr &MI) {
   auto Emit = [&](const MCInst &Inst) { EmitToStreamer(*OutStreamer, Inst); };
-  auto ToDR = [&](unsigned N, MCRegister Lo, MCRegister Hi) {
-    Emit(MCInstBuilder(RX::DMOV_L_rl).addReg(N ? RX::DRL1 : RX::DRL0)
-             .addReg(Lo));
-    Emit(MCInstBuilder(RX::DMOV_L_rh).addReg(N ? RX::DRH1 : RX::DRH0)
-             .addReg(Hi));
-  };
-  auto FromDR0 = [&](MCRegister Lo, MCRegister Hi) {
-    Emit(MCInstBuilder(RX::DMOV_L_lr).addReg(Lo).addReg(RX::DRL0));
-    Emit(MCInstBuilder(RX::DMOV_L_hr).addReg(Hi).addReg(RX::DRH0));
-  };
+  const MCRegisterInfo &MRI = *OutContext.getRegisterInfo();
   auto Reg = [&](unsigned I) { return MI.getOperand(I).getReg(); };
+  auto Half = [&](unsigned I, unsigned RC) {
+    return MRI.getRegClass(RC).getRegister(MRI.getEncodingValue(Reg(I)));
+  };
 
   switch (MI.getOpcode()) {
-  case RX::DARITH_P: {
-    unsigned Opc;
-    switch (MI.getOperand(2).getImm()) {
-    case 0: Opc = RX::DADD; break;
-    case 1: Opc = RX::DSUB; break;
-    case 2: Opc = RX::DMUL; break;
-    case 5: Opc = RX::DDIV; break;
-    default: llvm_unreachable("unexpected DFPU operation");
-    }
-    ToDR(0, Reg(3), Reg(4));
-    ToDR(1, Reg(5), Reg(6));
-    Emit(MCInstBuilder(Opc).addReg(RX::DR0).addReg(RX::DR1).addReg(RX::DR0));
-    FromDR0(Reg(0), Reg(1));
-    return;
-  }
-  case RX::DSQRT_P:
-    ToDR(0, Reg(2), Reg(3));
-    Emit(MCInstBuilder(RX::DSQRT).addReg(RX::DR0).addReg(RX::DR0));
-    FromDR0(Reg(0), Reg(1));
-    return;
-  case RX::ITOD_P:
-  case RX::UTOD_P:
-    Emit(MCInstBuilder(MI.getOpcode() == RX::ITOD_P ? RX::ITOD : RX::UTOD)
-             .addReg(RX::DR0)
+  case RX::DR_PAIR_P:
+    Emit(MCInstBuilder(RX::DMOV_L_rl).addReg(Half(0, RX::DRLRegClassID))
+             .addReg(Reg(1)));
+    Emit(MCInstBuilder(RX::DMOV_L_rh).addReg(Half(0, RX::DRHRegClassID))
              .addReg(Reg(2)));
-    FromDR0(Reg(0), Reg(1));
+    return;
+  case RX::DR_SPLIT_P:
+    Emit(MCInstBuilder(RX::DMOV_L_lr).addReg(Reg(0))
+             .addReg(Half(2, RX::DRLRegClassID)));
+    Emit(MCInstBuilder(RX::DMOV_L_hr).addReg(Reg(1))
+             .addReg(Half(2, RX::DRHRegClassID)));
+    return;
+  case RX::DR_LO_P:
+    Emit(MCInstBuilder(RX::DMOV_L_lr).addReg(Reg(0))
+             .addReg(Half(1, RX::DRLRegClassID)));
     return;
   case RX::DCMP_P: {
     unsigned Opc;
@@ -166,9 +143,7 @@ void RXAsmPrinter::emitDFPU(const MachineInstr &MI) {
     case 6: Opc = RX::DCMPLE; break;
     default: llvm_unreachable("unexpected DCMP condition");
     }
-    ToDR(0, Reg(1), Reg(2));
-    ToDR(1, Reg(3), Reg(4));
-    Emit(MCInstBuilder(Opc).addReg(RX::DR1).addReg(RX::DR0));
+    Emit(MCInstBuilder(Opc).addReg(Reg(2)).addReg(Reg(1)));
     Emit(MCInstBuilder(RX::MVFDR));
     return;
   }

@@ -49,6 +49,12 @@ BitVector RXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     Reserved.set(Reg);
   Reserved.set(RX::ACC0);
   Reserved.set(RX::ACC1);
+  // Code generation uses only DR0 and DR1, the DR registers that rx-rt's
+  // interrupt entry saves (with the dfpu feature); all of them are
+  // caller-saved.
+  for (MCPhysReg Reg : RX::DPRRegClass)
+    if (Reg != RX::DR0 && Reg != RX::DR1)
+      Reserved.set(Reg);
   return Reserved;
 }
 
@@ -78,6 +84,8 @@ static unsigned getAccessScale(unsigned Opc) {
   case RX::FDIV_mP:
   case RX::FCMP_mP:
   case RX::FSQRT_mP:
+  case RX::DST_D: // dmov.d: the displacement is scaled by 4
+  case RX::DLD_D:
     return 4;
   default:
     return 1;
