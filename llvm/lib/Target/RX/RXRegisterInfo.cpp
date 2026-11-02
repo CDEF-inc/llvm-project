@@ -43,6 +43,8 @@ const uint32_t *RXRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
 BitVector RXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   Reserved.set(RX::R0); // SP
+  if (getFrameLowering(MF)->hasFP(MF))
+    Reserved.set(RX::R6);
   for (MCPhysReg Reg : RX::CTRLRegClass)
     Reserved.set(Reg);
   for (MCPhysReg Reg : RX::DCRRegClass) // DPSW, ...
@@ -103,15 +105,17 @@ bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
 
   // Offsets are relative to the CFA (SP before the call pushed the return
-  // address); SP now sits StackSize bytes below the return address.
+  // address); SP after the prologue, and the frame pointer if there is one,
+  // sit StackSize bytes below the return address.
   int64_t Offset = MFI.getObjectOffset(FrameIndex) + 4 + MFI.getStackSize() +
                    MI.getOperand(FIOperandNum + 1).getImm();
+  Register Base = getFrameRegister(MF);
 
   if (MI.getOpcode() == RX::FRMIDX) {
-    // add #Offset, r0, rd
+    // add #Offset, r0 (or r6), rd
     const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
     MI.setDesc(TII.get(RX::ADD_rri32));
-    MI.getOperand(FIOperandNum).ChangeToRegister(RX::R0, false);
+    MI.getOperand(FIOperandNum).ChangeToRegister(Base, false);
     MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
     return false;
   }
@@ -119,11 +123,18 @@ bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   if (!isEncodableDisp(Offset, getAccessScale(MI.getOpcode())))
     report_fatal_error("RX: stack offset not encodable in a dsp:16 access");
 
-  MI.getOperand(FIOperandNum).ChangeToRegister(RX::R0, false);
+  MI.getOperand(FIOperandNum).ChangeToRegister(Base, false);
   MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
   return false;
 }
 
 Register RXRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
-  return RX::R0;
+  return getFrameLowering(MF)->hasFP(MF) ? RX::R6 : RX::R0;
+}
+
+// Inline assembly that clobbers SP, or R6 in a function with a frame
+// pointer, gets the "clobber list contains reserved registers" warning.
+bool RXRegisterInfo::isAsmClobberable(const MachineFunction &MF,
+                                      MCRegister PhysReg) const {
+  return PhysReg != RX::R0 && PhysReg != getFrameRegister(MF).asMCReg();
 }

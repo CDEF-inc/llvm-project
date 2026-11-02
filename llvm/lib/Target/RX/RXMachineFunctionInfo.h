@@ -24,6 +24,10 @@ class RXMachineFunctionInfo : public MachineFunctionInfo {
   /// Virtual register holding the incoming sret pointer (returned in R1).
   Register SRetReturnReg;
 
+  /// Fixed stack object at the first unnamed argument of a variadic
+  /// function (where va_start points).
+  int VarArgsFrameIndex = 0;
+
 public:
   RXMachineFunctionInfo() = default;
   RXMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {}
@@ -40,6 +44,9 @@ public:
 
   Register getSRetReturnReg() const { return SRetReturnReg; }
   void setSRetReturnReg(Register Reg) { SRetReturnReg = Reg; }
+
+  int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
+  void setVarArgsFrameIndex(int FI) { VarArgsFrameIndex = FI; }
 };
 
 } // end namespace llvm

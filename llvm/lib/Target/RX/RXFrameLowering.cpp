@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -29,8 +30,14 @@ RXFrameLowering::RXFrameLowering(const RXSubtarget &STI)
                           /*LocalAreaOffset=*/-4, Align(4)),
       STI(STI) {}
 
+// R6 is the frame pointer, as in GCC: when requested (-frame-pointer), and
+// when SP moves during the function (dynamic alloca). It is set to SP at
+// the end of the prologue, the bottom of the fixed frame, so frame objects
+// have the same offsets from it as from SP.
 bool RXFrameLowering::hasFPImpl(const MachineFunction &MF) const {
-  return false;
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  return MF.getTarget().Options.DisableFramePointerElim(MF) ||
+         MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken();
 }
 
 bool RXFrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
@@ -51,9 +58,6 @@ static void adjustSP(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
 void RXFrameLowering::emitPrologue(MachineFunction &MF,
                                    MachineBasicBlock &MBB) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
-  if (MFI.hasVarSizedObjects())
-    report_fatal_error("RX: dynamic stack allocation is not supported yet");
-
   const TargetInstrInfo &TII = *STI.getInstrInfo();
   auto *FI = MF.getInfo<RXMachineFunctionInfo>();
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -79,6 +83,30 @@ void RXFrameLowering::emitPrologue(MachineFunction &MF,
   }
 
   uint64_t NumBytes = MFI.getStackSize() - RegBytes;
+  if (hasFP(MF)) {
+    // add #-N, r0, r6 / mov.l r6, r0 (as GCC), or mov.l r0, r6 for an
+    // empty frame. From the first instruction on, the CFA is R6 + offset,
+    // which stays right while SP moves.
+    if (NumBytes) {
+      MachineInstr *MI =
+          BuildMI(MBB, MBBI, DL, TII.get(RX::ADD_rri32), RX::R6)
+              .addReg(RX::R0)
+              .addImm(-static_cast<int64_t>(NumBytes))
+              .setMIFlag(MachineInstr::FrameSetup);
+      MI->findRegisterDefOperand(RX::PSW, /*TRI=*/nullptr)->setIsDead();
+    } else {
+      BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R6)
+          .addReg(RX::R0)
+          .setMIFlag(MachineInstr::FrameSetup);
+    }
+    if (NeedsCFI)
+      CFIBuilder.buildDefCFA(RX::R6, 4 + RegBytes + NumBytes);
+    if (NumBytes)
+      BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R0)
+          .addReg(RX::R6)
+          .setMIFlag(MachineInstr::FrameSetup);
+    return;
+  }
   if (NumBytes) {
     adjustSP(MBB, MBBI, DL, TII, -static_cast<int64_t>(NumBytes),
              MachineInstr::FrameSetup);
@@ -114,8 +142,16 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
 
   // The CFI follows each instruction that moves SP but does not return.
   // CFIFixup puts .cfi_remember_state / .cfi_restore_state around an
-  // epilogue that is not at the end of the function.
+  // epilogue that is not at the end of the function. With a frame pointer
+  // the CFA is R6 + offset until R6 is restored, so only the pop needs CFI.
   bool NeedsCFI = MF.needsFrameMoves();
+  bool FP = hasFP(MF);
+
+  // SP back to the bottom of the fixed frame, where R6 points.
+  if (FP && MFI.hasVarSizedObjects())
+    BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R0)
+        .addReg(RX::R6)
+        .setMIFlag(MachineInstr::FrameDestroy);
 
   // rtsd #imm, lo-hi frees imm bytes, the registers included, then pops
   // lo..hi and returns; rtsd #imm frees imm bytes and returns. imm is at
@@ -126,7 +162,7 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
     if (NumBytes + RegBytes > 1020) {
       adjustSP(MBB, MBBI, DL, TII, static_cast<int64_t>(NumBytes),
                MachineInstr::FrameDestroy);
-      if (NeedsCFI)
+      if (NeedsCFI && !FP)
         CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
             .buildDefCFAOffset(4 + RegBytes);
       NumBytes = 0;
@@ -156,13 +192,15 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
     return;
   }
 
-  if (NumBytes) {
+  if (NumBytes)
     adjustSP(MBB, MBBI, DL, TII, static_cast<int64_t>(NumBytes),
              MachineInstr::FrameDestroy);
-    if (NeedsCFI)
-      CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
-          .buildDefCFAOffset(4 + RegBytes);
-  }
+  if (NeedsCFI && FP)
+    CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
+        .buildDefCFA(RX::R0, 4 + RegBytes);
+  else if (NeedsCFI && NumBytes)
+    CFIInstBuilder(MBB, MBBI, MachineInstr::FrameDestroy)
+        .buildDefCFAOffset(4 + RegBytes);
   if (Restore && NeedsCFI) {
     CFIInstBuilder CFIBuilder(MBB, Term, MachineInstr::FrameDestroy);
     CFIBuilder.buildDefCFAOffset(4);
@@ -175,6 +213,8 @@ void RXFrameLowering::determineCalleeSaves(MachineFunction &MF,
                                            BitVector &SavedRegs,
                                            RegScavenger *RS) const {
   TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
+  if (hasFP(MF))
+    SavedRegs.set(RX::R6);
 
   // Save one range of registers: the callee-saved registers are R6..R13
   // in order, so fill in the ones between the lowest and the highest used.
@@ -260,6 +300,19 @@ bool RXFrameLowering::restoreCalleeSavedRegisters(
 MachineBasicBlock::iterator RXFrameLowering::eliminateCallFramePseudoInstr(
     MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator I) const {
-  // The outgoing argument area is reserved in the prologue.
+  // The outgoing argument area is reserved in the prologue, except in a
+  // function with dynamic allocas: there SP moves, so each call allocates
+  // its area (add #-N, r0 before it, add #N, r0 after it). N is rounded up
+  // to the stack alignment: a byval argument takes its own size, so the
+  // arguments may end at an odd offset.
+  if (!hasReservedCallFrame(MF)) {
+    int64_t Amount = alignTo(I->getOperand(0).getImm(), getStackAlign());
+    if (Amount) {
+      if (I->getOpcode() == RX::ADJCALLSTACKDOWN)
+        Amount = -Amount;
+      adjustSP(MBB, I, I->getDebugLoc(), *STI.getInstrInfo(), Amount,
+               MachineInstr::NoFlags);
+    }
+  }
   return MBB.erase(I);
 }
