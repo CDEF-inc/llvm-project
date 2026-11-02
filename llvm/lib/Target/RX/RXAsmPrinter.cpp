@@ -138,6 +138,7 @@ void RXAsmPrinter::emitDFPU(const MachineInstr &MI) {
   case RX::DCMP_P: {
     unsigned Opc;
     switch (MI.getOperand(0).getImm()) {
+    case 1: Opc = RX::DCMPUN; break;
     case 2: Opc = RX::DCMPEQ; break;
     case 4: Opc = RX::DCMPLT; break;
     case 6: Opc = RX::DCMPLE; break;

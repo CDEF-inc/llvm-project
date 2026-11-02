@@ -3020,10 +3020,14 @@ def : Pat<(fdiv (f32 GPR:$a), (f32 GPR:$b)), (FDIV_rr GPR:$a, GPR:$b)>;
 // fcmp src, src2 sets the flags for src2 - src, like cmp.
 def : Pat<(RXfcmp (f32 GPR:$a), (f32 GPR:$b)), (FCMP_rr GPR:$a, GPR:$b)>;
 def : Pat<(f32 (sint_to_fp (i32 GPR:$a))), (ITOF_rr GPR:$a)>;
+// ftoi / ftou truncate; RXISelLowering leaves fp_to_sint / fp_to_uint only
+// where denormals may be flushed.
+def : Pat<(i32 (fp_to_sint (f32 GPR:$a))), (FTOI_rr GPR:$a)>;
 }
 let Predicates = [HasFPU, HasRXv2] in {
 def : Pat<(fsqrt (f32 GPR:$a)), (FSQRT_rr GPR:$a)>;
 def : Pat<(f32 (uint_to_fp (i32 GPR:$a))), (UTOF_rr GPR:$a)>;
+def : Pat<(i32 (fp_to_uint (f32 GPR:$a))), (FTOU_rr GPR:$a)>;
 }
 // The RXv2 3-operand forms are as short as the 2-operand ones and need no
 // copy when both sources stay live; RXMCInstLower uses the 2-operand form
