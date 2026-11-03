@@ -42,6 +42,9 @@ public:
     IntPtrType = SignedLong;
     WCharType = SignedLong;
     WIntType = UnsignedInt;
+    // C symbols carry a leading underscore (GCC's USER_LABEL_PREFIX), as the
+    // data layout's `m:o` mangling says.
+    UserLabelPrefix = "_";
     resetDataLayout();
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 32;
   }
