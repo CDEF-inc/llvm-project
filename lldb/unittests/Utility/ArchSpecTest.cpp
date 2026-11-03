@@ -139,6 +139,14 @@ TEST(ArchSpecTest, TestSetTriple) {
   EXPECT_EQ(ArchSpec::eCore_msp430, AS.GetCore());
 
   AS = ArchSpec();
+  EXPECT_TRUE(AS.SetTriple("rx-none-elf"));
+  EXPECT_EQ(llvm::Triple::rx, AS.GetTriple().getArch());
+  EXPECT_STREQ("rx", AS.GetArchitectureName());
+  EXPECT_EQ(ArchSpec::eCore_rx, AS.GetCore());
+  EXPECT_EQ(4u, AS.GetAddressByteSize());
+  EXPECT_EQ(1u, AS.GetMinimumOpcodeByteSize());
+
+  AS = ArchSpec();
   EXPECT_TRUE(AS.SetTriple("amd64-unknown-openbsd"));
   EXPECT_EQ(llvm::Triple::x86_64, AS.GetTriple().getArch());
   EXPECT_STREQ("amd64", AS.GetArchitectureName());

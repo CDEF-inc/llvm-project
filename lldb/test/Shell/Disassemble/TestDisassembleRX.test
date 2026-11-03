@@ -1,0 +1,39 @@
+# REQUIRES: rx-registered-target
+
+## An RX ELF file: LLDB knows the architecture and disassembles every
+## instruction set (here the RXv1 mov / add / bsr and the RXv3 DFPU's dadd)
+## without a CPU being given.
+
+# RUN: yaml2obj %s -o %t
+# RUN: %lldb -b -o "target list" -o "disassemble -b -n _start" %t | FileCheck %s
+
+# CHECK:      arch=rx
+# CHECK:      _start:
+# CHECK-NEXT: <+0>:  66 11       mov.l  #1, r1
+# CHECK-NEXT: <+2>:  62 21       add    #2, r1
+# CHECK-NEXT: <+4>:  76 90 20 31 dadd   dr1, dr2, dr3
+# CHECK-NEXT: <+8>:  39 f8 ff    bsr.w  0x1000
+# CHECK-NEXT: <+11>: 02          rts
+
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS32
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_RX
+  Entry:           0x1000
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address:         0x1000
+    AddressAlign:    0x1
+    ## mov.l, add, dadd, bsr.w _start, rts
+    Content:         '661162217690203139f8ff02'
+Symbols:
+  - Name:            _start
+    Type:            STT_FUNC
+    Section:         .text
+    Value:           0x1000
+    Size:            12
+    Binding:         STB_GLOBAL

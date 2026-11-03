@@ -1,0 +1,84 @@
+//===--- RX.h - Declare RX target feature support ---------------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file declares the Renesas RX TargetInfo: the types of GCC for rx-elf
+// with -m64bit-doubles (the ABI of the RX backend and rustc's rx-none-elf).
+// It is there for LLDB's type system; clang does not generate RX code.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_RX_H
+#define LLVM_CLANG_LIB_BASIC_TARGETS_RX_H
+
+#include "clang/Basic/TargetInfo.h"
+#include "clang/Basic/TargetOptions.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/TargetParser/Triple.h"
+
+namespace clang {
+namespace targets {
+
+class LLVM_LIBRARY_VISIBILITY RXTargetInfo : public TargetInfo {
+  static const char *const GCCRegNames[];
+
+public:
+  RXTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
+      : TargetInfo(Triple) {
+    TLSSupported = false;
+    // 64-bit types are 4-byte aligned (BIGGEST_ALIGNMENT is 32), and double
+    // and long double are 64 bits.
+    LongLongAlign = 32;
+    DoubleAlign = LongDoubleAlign = 32;
+    LongDoubleWidth = 64;
+    LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+    SuitableAlign = 32;
+    SizeType = UnsignedLong;
+    PtrDiffType = SignedLong;
+    IntPtrType = SignedLong;
+    WCharType = SignedLong;
+    WIntType = UnsignedInt;
+    resetDataLayout();
+    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 32;
+  }
+
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override;
+
+  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override {
+    return {};
+  }
+
+  bool hasFeature(StringRef Feature) const override { return Feature == "rx"; }
+
+  ArrayRef<const char *> getGCCRegNames() const override;
+
+  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
+    static const TargetInfo::GCCRegAlias GCCRegAliases[] = {{{"sp"}, "r0"}};
+    return llvm::ArrayRef(GCCRegAliases);
+  }
+
+  bool validateAsmConstraint(const char *&Name,
+                             TargetInfo::ConstraintInfo &Info) const override {
+    switch (*Name) {
+    case 'r':
+      Info.setAllowsRegister();
+      return true;
+    }
+    return false;
+  }
+
+  std::string_view getClobbers() const override { return ""; }
+
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    return TargetInfo::VoidPtrBuiltinVaList;
+  }
+};
+
+} // namespace targets
+} // namespace clang
+#endif // LLVM_CLANG_LIB_BASIC_TARGETS_RX_H
