@@ -23,6 +23,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstring>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -134,8 +135,21 @@ ABISP ABISysV_rx::CreateInstance(ProcessSP process_sp, const ArchSpec &arch) {
   return ABISP();
 }
 
-// The registers a value of SIZE bytes comes back in, as bytes: r1, r2, ...
-// little-endian (a 64-bit scalar is r1:r2, an aggregate the bytes of r1-r4).
+// RX is little-endian; these do not depend on the host's byte order.
+static uint64_t LoadLE(const uint8_t *p, size_t n) {
+  uint64_t v = 0;
+  for (size_t i = 0; i < n; ++i)
+    v |= uint64_t(p[i]) << (8 * i);
+  return v;
+}
+
+static void StoreLE(uint8_t *p, uint64_t v, size_t n) {
+  for (size_t i = 0; i < n; ++i)
+    p[i] = uint8_t(v >> (8 * i));
+}
+
+// The registers a value of SIZE bytes comes back in, as target bytes: r1,
+// r2, ... (a 64-bit scalar is r1:r2, an aggregate the bytes of r1-r4).
 static bool ReadReturnBytes(RegisterContext &reg_ctx, size_t size,
                             std::vector<uint8_t> &bytes) {
   bytes.assign((size + 3) & ~size_t(3), 0);
@@ -144,24 +158,35 @@ static bool ReadReturnBytes(RegisterContext &reg_ctx, size_t size,
         reg_ctx.GetRegisterInfoByName(("r" + std::to_string(i + 1)).c_str());
     if (!r)
       return false;
-    uint32_t v = reg_ctx.ReadRegisterAsUnsigned(r, 0);
-    memcpy(&bytes[4 * i], &v, 4);
+    StoreLE(&bytes[4 * i], reg_ctx.ReadRegisterAsUnsigned(r, 0), 4);
   }
   bytes.resize(size);
   return true;
 }
 
-// Whether TYPE comes from Rust, whose own ABI returns aggregates differently
-// from the C ABI. DWARF does not record a function's calling convention, but
-// Rust types have paths (`lldb_demo::Point`, `core::option::Option<u32>`) or
-// are tuples, and C types have neither.
-static bool IsRustType(const CompilerType &type) {
+// Whether a value of TYPE moves by Rust's own ABI, which returns aggregates
+// differently from the C ABI. DWARF does not record a function's calling
+// convention, so this goes by FRAME's language (for `finish` the caller, for
+// `thread return` the function itself) and by the type: Rust types have
+// paths (`lldb_demo::Point`, `core::option::Option<u32>`) or are tuples. A
+// C++ type with a namespace is not Rust: its frames are not. An `extern "C"`
+// Rust function called from Rust is still taken as Rust.
+static bool UsesRustABI(StackFrame *frame, const CompilerType &type) {
   llvm::StringRef name = type.GetTypeName().GetStringRef();
-  return name.contains("::") || name.starts_with("(");
+  if (!name.contains("::") && !name.starts_with("("))
+    return false;
+  if (frame) {
+    lldb::LanguageType lang = frame->GetLanguage().AsLanguageType();
+    if (lang != eLanguageTypeUnknown)
+      return lang == eLanguageTypeRust;
+  }
+  return true;
 }
 
 // For a two-field aggregate of scalars (rustc's ScalarPair), the fields'
-// byte offsets and sizes.
+// byte offsets and sizes, in memory order: rustc may reorder the fields
+// (`{ a: u8, b: u32 }` puts b first), and the pair is returned in that order,
+// while DWARF lists them as declared.
 static bool GetScalarPair(Thread &thread, const CompilerType &type,
                           uint64_t off[2], uint64_t size[2]) {
   if (type.GetNumFields() != 2)
@@ -179,6 +204,10 @@ static bool GetScalarPair(Thread &thread, const CompilerType &type,
     if (size[i] == 0 || size[i] > 8)
       return false;
   }
+  if (off[0] > off[1]) {
+    std::swap(off[0], off[1]);
+    std::swap(size[0], size[1]);
+  }
   return true;
 }
 
@@ -192,11 +221,11 @@ static bool GetScalarPair(Thread &thread, const CompilerType &type,
 //   memory. A pair whose second field starts at offset 4 or 8 has the same
 //   bytes either way.
 static bool GetAggregateBytes(Thread &thread, RegisterContext &reg_ctx,
-                              const CompilerType &type, uint64_t size,
-                              std::vector<uint8_t> &bytes) {
+                              const CompilerType &type, bool rust,
+                              uint64_t size, std::vector<uint8_t> &bytes) {
   if (size == 0 || size > 16)
     return false;
-  if (!IsRustType(type))
+  if (!rust)
     return size % 4 == 0 && ReadReturnBytes(reg_ctx, size, bytes);
 
   uint64_t off[2], fsize[2];
@@ -242,7 +271,7 @@ Status ABISysV_rx::SetReturnValueObject(StackFrameSP &frame_sp,
                            eTypeIsEnumeration)) && size <= 8;
   if (!in_regs && type.IsAggregateType()) {
     uint64_t off[2], fsize[2];
-    in_regs = IsRustType(type)
+    in_regs = UsesRustABI(frame_sp.get(), type)
                   ? (size <= 8 && !(GetScalarPair(*thread, type, off, fsize) &&
                                     off[1] != ((fsize[0] + 3) / 4) * 4))
                   : (size >= 1 && size <= 16 && size % 4 == 0);
@@ -256,9 +285,7 @@ Status ABISysV_rx::SetReturnValueObject(StackFrameSP &frame_sp,
   for (size_t i = 0; i < bytes.size() / 4; ++i) {
     const RegisterInfo *r =
         reg_ctx.GetRegisterInfoByName(("r" + std::to_string(i + 1)).c_str());
-    uint32_t v;
-    memcpy(&v, &bytes[4 * i], 4);
-    if (!r || !reg_ctx.WriteRegisterFromUnsigned(r, v))
+    if (!r || !reg_ctx.WriteRegisterFromUnsigned(r, LoadLE(&bytes[4 * i], 4)))
       return Status::FromErrorString("couldn't write the return registers");
   }
   return Status();
@@ -307,9 +334,11 @@ bool ABISysV_rx::GetArgumentValues(Thread &thread, ValueList &values) const {
         raw |= (reg_ctx->ReadRegisterAsUnsigned(r, 0) & 0xffffffff) << (32 * k);
       }
     } else {
+      uint8_t buf[8];
       Status error;
-      if (process->ReadMemory(stack, &raw, size, error) != size)
+      if (process->ReadMemory(stack, buf, size, error) != size)
         return false;
+      raw = LoadLE(buf, size);
       stack += 4 * slots;
     }
     // The count advances for every argument, also one on the stack.
@@ -348,8 +377,11 @@ ABISysV_rx::GetReturnValueObjectImpl(Thread &thread,
 
   if (return_compiler_type.IsAggregateType()) {
     std::vector<uint8_t> bytes;
-    if (!GetAggregateBytes(thread, *reg_ctx, return_compiler_type, byte_size,
-                           bytes))
+    // After `finish`, frame 0 is the caller.
+    const bool rust = UsesRustABI(thread.GetStackFrameAtIndex(0).get(),
+                                  return_compiler_type);
+    if (!GetAggregateBytes(thread, *reg_ctx, return_compiler_type, rust,
+                           byte_size, bytes))
       return ValueObjectSP();
     value.SetBytes(bytes.data(), bytes.size());
     return ValueObjectConstResult::Create(thread.GetStackFrameAtIndex(0).get(),
@@ -365,8 +397,7 @@ ABISysV_rx::GetReturnValueObjectImpl(Thread &thread,
   std::vector<uint8_t> bytes;
   if (!ReadReturnBytes(*reg_ctx, byte_size, bytes))
     return ValueObjectSP();
-  uint64_t raw = 0;
-  memcpy(&raw, bytes.data(), byte_size);
+  const uint64_t raw = LoadLE(bytes.data(), byte_size);
 
   value.SetValueType(Value::ValueType::Scalar);
   Scalar &scalar = value.GetScalar();
