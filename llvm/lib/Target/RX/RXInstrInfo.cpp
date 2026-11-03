@@ -229,10 +229,12 @@ RXInstrInfo::getBranchDestBlock(const MachineInstr &MI) const {
 
 bool RXInstrInfo::isBranchOffsetInRange(unsigned BranchOpc,
                                         int64_t BrOffset) const {
-  // Displacements are relative to the start of the branch instruction.
+  // Displacements are relative to the start of the branch instruction. Both
+  // are emitted as sizeless branches (RXMCInstLower), which the assembler
+  // grows as far as a bra.a around which b<cc> branches on the inverted
+  // condition, so branch relaxation only has to keep within 24 bits.
   switch (BranchOpc) {
   case RX::BCC:
-    return isInt<8>(BrOffset);
   case RX::BRA_A:
     return isInt<24>(BrOffset);
   default:

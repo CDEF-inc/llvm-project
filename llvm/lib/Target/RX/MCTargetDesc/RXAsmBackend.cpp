@@ -96,8 +96,11 @@ bool RXAsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &F,
   // Value is relative to the fixup. Like GNU as, measure the distance from
   // the start of the whole sequence: for a single branch that is the
   // branch itself, for b<!cond> + bra.w the b<!cond> (so a bra.w that would
-  // just reach becomes a bra.a, as in GNU as).
-  int64_t Dsp = static_cast<int64_t>(Value) + Fixup.getOffset();
+  // just reach becomes a bra.a, as in GNU as). The sequence is the
+  // fragment's variable part; the fixup's offset also counts the fixed part
+  // before it.
+  int64_t Dsp = static_cast<int64_t>(Value) +
+                (Fixup.getOffset() - F.getFixedSize());
   switch (Fixup.getKind()) {
   case RX::fixup_rx_pcrel3:
     return Dsp < 3 || Dsp > 10;
