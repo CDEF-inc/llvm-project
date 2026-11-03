@@ -187,8 +187,10 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_RX_DIR32_REV:
     write32be(loc, val);
     return;
+  // The signed fields take the 32-bit address as a signed number (0xffff8000
+  // is -32768), as relaxation picks their sizes (mov.l #sym).
   case R_RX_DIR24S:
-    range(v, -0x800000, 0x7fffff);
+    range(int32_t(val), -0x800000, 0x7fffff);
     writeLE(loc, val, 3);
     return;
   case R_RX_DIR16:
@@ -200,7 +202,7 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     write16le(loc, val);
     return;
   case R_RX_DIR16S:
-    range(v, -32768, 65535);
+    range(int32_t(val), -32768, 65535);
     write16le(loc, val);
     return;
   case R_RX_DIR16_REV:
@@ -224,7 +226,7 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     *loc = val;
     return;
   case R_RX_DIR8S:
-    range(v, -128, 255);
+    range(int32_t(val), -128, 255);
     *loc = val;
     return;
   case R_RX_DIR8UL:
@@ -416,7 +418,10 @@ static bool relaxSection(Ctx &ctx, int pass, InputSection &sec) {
       aux.relocTypes[i] = pendingType;
       remove = pendingRemove;
       pendingType = R_RX_NONE;
-    } else if (r.type == R_RX_RH_RELAX && ctx.arg.relax) {
+    } else if (r.type == R_RX_RH_RELAX &&
+               (ctx.arg.relax || (uint32_t(r.addend) & RX_RELAXA_ALIGN))) {
+      // With --no-relax only the alignment hints count: the assembler left
+      // the most padding, which still has to fit the alignment.
       const uint32_t flags = r.addend;
       const bool hasField = i + 1 < relocs.size();
       // The bytes the previous pass deleted from this instruction; from pass 4
@@ -528,8 +533,6 @@ static bool hasRelaxHints(const InputSection &sec) {
 }
 
 bool RX::relaxOnce(int pass) const {
-  if (!ctx.arg.relax)
-    return false;
   if (pass == 0)
     initSymbolAnchors(ctx);
   SmallVector<InputSection *, 0> storage;
@@ -545,8 +548,6 @@ bool RX::relaxOnce(int pass) const {
 }
 
 void RX::finalizeRelax(int passes) const {
-  if (!ctx.arg.relax)
-    return;
   SmallVector<InputSection *, 0> storage;
   for (OutputSection *osec : ctx.outputSections) {
     if (!(osec->flags & SHF_EXECINSTR))

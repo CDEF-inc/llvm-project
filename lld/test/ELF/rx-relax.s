@@ -68,6 +68,11 @@ g:
 # NORELAX-NEXT: 1002: 05 {{.*}} bsr.a
 # NORELAX-NEXT: 1006: fb 12 04 20 00 00{{ +}}mov.l #8196, r1
 # NORELAX:      100c: fb 22 7f 00 00 00{{ +}}mov.l #127, r2
+## the alignment still holds: 1 of the 3 NOPs is left
+# NORELAX:      1017: 03{{ +}}nop
+# NORELAX-EMPTY:
+# NORELAX-NEXT: <g>:
+# NORELAX-NEXT: 1018: 02{{ +}}rts
 
   .data
   .long 0

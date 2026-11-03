@@ -106,10 +106,10 @@ public:
 
 private:
   void recordRelaxHint(const MCFragment &F, const MCFixup &Fixup);
-  bool isPCRelFixupResolved(const MCSymbol *Sym, const MCFragment &F);
+  bool isPCRelFixupResolved(const MCSymbol *Sym, const MCFragment &F) const;
 
   // A temporary symbol at the fixup's fragment, for isPCRelFixupResolved.
-  MCSymbol *PCRelTemp = nullptr;
+  mutable MCSymbol *PCRelTemp = nullptr;
 };
 
 } // end anonymous namespace
@@ -121,6 +121,13 @@ bool RXAsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &F,
                                                 bool Resolved) const {
   ArrayRef<MCOperand> Ops = F.getOperands();
   unsigned Kind = Ops[1].getImm(), Step = Ops[2].getImm();
+  // Except for the 3-bit .s forms, whose distance must stay at least 3: over
+  // code the linker may shorten or alignment padding it may delete, it can
+  // come below, so these take the next form.
+  if (Fixup.getKind() == RX::fixup_rx_pcrel3 &&
+      F.getParent()->isLinkerRelaxable() &&
+      (!Resolved || !isPCRelFixupResolved(Target.getAddSym(), F)))
+    return true;
   if (!Resolved) {
     // In a section the linker may shorten (relaxation), a target in the
     // same section is unresolved because of that. Its distance is known, and
@@ -254,7 +261,7 @@ void RXAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
 // linker-relaxable fragments (instructions the linker may shorten, or
 // alignment padding it may delete) lie between them (as for RISC-V).
 bool RXAsmBackend::isPCRelFixupResolved(const MCSymbol *Sym,
-                                        const MCFragment &F) {
+                                        const MCFragment &F) const {
   if (!Sym || !F.getParent()->isLinkerRelaxable())
     return true;
   if (!PCRelTemp)
