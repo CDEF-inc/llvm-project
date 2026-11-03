@@ -13,6 +13,7 @@
 
 #include "RXMCInstLower.h"
 #include "MCTargetDesc/RXMCTargetDesc.h"
+#include "MCTargetDesc/RXSizelessBranch.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -111,14 +112,31 @@ void RXMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOp);
   }
 
-  // Condition-code pseudos (BCC dst, cc / SCC rd, cc): the condition operand
-  // selects the opcode.
-  if (OutMI.getOpcode() == RX::BCC || OutMI.getOpcode() == RX::SCC) {
-    bool IsBranch = OutMI.getOpcode() == RX::BCC;
-    unsigned CC = OutMI.getOperand(1).getImm();
-    assert(CC < std::size(BccOpcodes) && "invalid condition code");
+  // Branches to blocks (bra.a, and BCC dst, cc for b<cc>) become sizeless
+  // ones, which the assembler sizes by distance: bra.s / .b / .w / .a,
+  // b<cc>.s / .b / .w, or around a bra.w / bra.a on the inverted condition
+  // (RXSizelessBranch.h). Written to a .s file they are "bra label" /
+  // "b<cc> label", which GNU as sizes the same way.
+  if ((OutMI.getOpcode() == RX::BRA_A || OutMI.getOpcode() == RX::BCC) &&
+      OutMI.getOperand(0).isExpr()) {
+    unsigned Kind = OutMI.getOpcode() == RX::BRA_A
+                        ? RX::BrKindBra
+                        : RX::BrKindCond + OutMI.getOperand(1).getImm();
     MCInst New;
-    New.setOpcode(IsBranch ? BccOpcodes[CC] : SccOpcodes[CC]);
+    New.setOpcode(RX::BR_SIZELESS);
+    New.addOperand(OutMI.getOperand(0));
+    New.addOperand(MCOperand::createImm(Kind));
+    New.addOperand(MCOperand::createImm(0));
+    OutMI = New;
+    return;
+  }
+
+  // sc<cond>.l (SCC rd, cc): the condition operand selects the opcode.
+  if (OutMI.getOpcode() == RX::SCC) {
+    unsigned CC = OutMI.getOperand(1).getImm();
+    assert(CC < std::size(SccOpcodes) && "invalid condition code");
+    MCInst New;
+    New.setOpcode(SccOpcodes[CC]);
     New.addOperand(OutMI.getOperand(0));
     OutMI = New;
   }

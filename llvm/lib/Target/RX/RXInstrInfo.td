@@ -2763,9 +2763,9 @@ def UMUL_LOHI_P : RXPseudo<(outs GPR:$lo, GPR:$hi), (ins GPR:$a, GPR:$b),
                                  (umullohi (i32 GPR:$a), (i32 GPR:$b)))]>;
 }
 
-// Conditional branch on a condition code; lowered to b<cond>.b. Branch
-// relaxation inverts it around a bra.a when the target is out of range.
-let isBranch = 1, isTerminator = 1, Uses = [PSW], Size = 2 in
+// Conditional branch on a condition code; lowered to a sizeless b<cond>
+// that the assembler sizes by distance (at most b<!cond>.b + bra.a, 6 bytes).
+let isBranch = 1, isTerminator = 1, Uses = [PSW], Size = 6 in
 def BCC : RXPseudo<(outs), (ins brtarget8:$dst, i32imm:$cc),
                    [(RXbrcc bb:$dst, imm:$cc)]>;
 
