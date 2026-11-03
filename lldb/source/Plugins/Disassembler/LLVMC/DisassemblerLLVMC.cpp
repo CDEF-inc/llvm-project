@@ -1660,6 +1660,11 @@ DisassemblerLLVMC::DisassemblerLLVMC(const ArchSpec &arch,
       cpu = "apple-latest";
   }
 
+  // RX: decode every instruction set (RXv1 to RXv3e with the FPU and DFPU)
+  // unless the CPU or features were overridden.
+  if (triple.getArch() == llvm::Triple::rx && !cpu_or_features_overriden)
+    cpu = "rxv3e";
+
   if (triple.isRISCV()) {
     auto subtarget_features = arch.GetSubtargetFeatures().getString();
     if (!cpu_or_features_overriden) {

@@ -2099,6 +2099,11 @@ llvm::ArrayRef<uint8_t> Platform::SoftwareTrapOpcodeBytes(const ArchSpec &arch,
         llvm::ArrayRef<uint8_t>(g_msp430_opcode, sizeof(g_msp430_opcode));
   } break;
 
+  case llvm::Triple::rx: {
+    static const uint8_t g_rx_opcode[] = {0x00}; // brk
+    trap_opcode = llvm::ArrayRef<uint8_t>(g_rx_opcode, sizeof(g_rx_opcode));
+  } break;
+
   case llvm::Triple::systemz: {
     static const uint8_t g_hex_opcode[] = {0x00, 0x01};
     trap_opcode = llvm::ArrayRef<uint8_t>(g_hex_opcode, sizeof(g_hex_opcode));
