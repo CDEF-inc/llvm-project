@@ -29,9 +29,7 @@ public:
   }
 
   bool GetArgumentValues(lldb_private::Thread &thread,
-                         lldb_private::ValueList &values) const override {
-    return false;
-  }
+                         lldb_private::ValueList &values) const override;
 
   lldb_private::Status
   SetReturnValueObject(lldb::StackFrameSP &frame_sp,
