@@ -122,12 +122,14 @@ bool RXAsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &F,
   ArrayRef<MCOperand> Ops = F.getOperands();
   unsigned Kind = Ops[1].getImm(), Step = Ops[2].getImm();
   if (!Resolved) {
-    // A label in the same section is unresolved only because the linker may
-    // shorten code in between (relaxation). Its distance is known, and the
-    // linker only deletes bytes, so a form that reaches it now still does.
+    // In a section the linker may shorten (relaxation), a target in the
+    // same section is unresolved because of that. Its distance is known, and
+    // the linker only deletes bytes, so a form that reaches it now still
+    // does. (Without relaxation, as with GNU as, a global symbol in the same
+    // section is also unresolved and gets the fixed form.)
     const MCSymbol *Sym = Target.getAddSym();
-    if (!Sym || Target.getSubSym() || !Sym->isInSection() ||
-        &Sym->getSection() != F.getParent())
+    if (!F.getParent()->isLinkerRelaxable() || !Sym || Target.getSubSym() ||
+        !Sym->isInSection() || &Sym->getSection() != F.getParent())
       // GNU as gives a target it cannot resolve a fixed form.
       return Step < RX::getSizelessBranchUnresolvedStep(Kind);
     Value = Asm->getSymbolOffset(*Sym) + Target.getConstant() -
