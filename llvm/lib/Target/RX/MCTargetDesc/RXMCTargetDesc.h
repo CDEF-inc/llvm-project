@@ -40,7 +40,7 @@ MCCodeEmitter *createRXMCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx);
 MCAsmBackend *createRXMCAsmBackend(const Target &T, const MCSubtargetInfo &STI,
                                    const MCRegisterInfo &MRI,
                                    const MCTargetOptions &Options);
-std::unique_ptr<MCObjectTargetWriter> createRXELFObjectWriter(uint8_t OSABI);
+std::unique_ptr<MCObjectTargetWriter> createRXELFObjectWriter(uint8_t OSABI, bool Relax);
 } // end namespace llvm
 
 // Defines symbolic names for RX registers. This defines a mapping from

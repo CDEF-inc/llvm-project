@@ -39,6 +39,7 @@ class RXSubtarget : public RXGenSubtargetInfo {
   bool HasFPU = false;
   bool Has64BitDoubles = false;
   bool FlushDenormals = false;
+  bool EnableRelax = false;
 
   RXInstrInfo InstrInfo;
   RXFrameLowering FrameLowering;
@@ -63,6 +64,7 @@ public:
   bool hasFPU() const { return HasFPU; }
   bool has64BitDoubles() const { return Has64BitDoubles; }
   bool flushDenormals() const { return FlushDenormals; }
+  bool enableRelax() const { return EnableRelax; }
 
   const RXInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const RXFrameLowering *getFrameLowering() const override {

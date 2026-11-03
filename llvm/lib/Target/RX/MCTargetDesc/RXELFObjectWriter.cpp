@@ -21,9 +21,17 @@ namespace {
 
 class RXELFObjectWriter : public MCELFObjectTargetWriter {
 public:
-  explicit RXELFObjectWriter(uint8_t OSABI)
+  RXELFObjectWriter(uint8_t OSABI, bool Relax)
       : MCELFObjectTargetWriter(/*Is64Bit=*/false, OSABI, ELF::EM_RX,
-                                /*HasRelocationAddend=*/true) {}
+                                /*HasRelocationAddend=*/true),
+        Relax(Relax) {}
+
+  // With linker relaxation, relocations name the symbol (also a local
+  // label), not section + offset: the linker moves the symbols when it
+  // deletes bytes.
+  bool needsRelocateWithSymbol(const MCValue &, unsigned Type) const override {
+    return Relax;
+  }
 
 protected:
   unsigned getRelocType(const MCFixup &Fixup, const MCValue &Target,
@@ -47,11 +55,14 @@ protected:
     reportError(Fixup.getLoc(), "unsupported relocation");
     return ELF::R_RX_NONE;
   }
+
+private:
+  bool Relax;
 };
 
 } // end anonymous namespace
 
 std::unique_ptr<MCObjectTargetWriter>
-llvm::createRXELFObjectWriter(uint8_t OSABI) {
-  return std::make_unique<RXELFObjectWriter>(OSABI);
+llvm::createRXELFObjectWriter(uint8_t OSABI, bool Relax) {
+  return std::make_unique<RXELFObjectWriter>(OSABI, Relax);
 }
