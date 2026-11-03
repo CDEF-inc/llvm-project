@@ -18,8 +18,12 @@
 //    "a - b" that the assembler cannot resolve. R_RX_SYM pushes S + A, the
 //    operators pop their operands and push the result, and R_RX_ABS* pops
 //    the value and writes it. All of them are at the same offset, in order.
-//  - R_RX_RH_RELAX marks code GNU ld may relax (with --relax); lld does not
-//    relax and ignores it.
+//  - R_RX_RH_RELAX (GNU as -relax, or LLVM's -mattr=+relax) marks code the
+//    linker may shorten. lld relaxes bsr.a / bra.a (to bsr.w, bra.w / bra.b)
+//    and the immediate of mov.l #sym (to #simm24 / 16 / 8), and deletes the
+//    alignment padding that is not needed, adjusting symbols and relocations
+//    as for RISC-V (relaxOnce / finalizeRelax). Label differences across
+//    such code are relocations, so they follow.
 //
 // The e_flags are merged as GNU ld does by default (its RX emulation passes
 // --no-flag-mismatch-warnings): the union of the ABI, 64-bit doubles, DSP
@@ -29,7 +33,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "InputFiles.h"
+#include "OutputSections.h"
 #include "Symbols.h"
+#include "SyntheticSections.h"
 #include "Target.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -61,8 +67,17 @@ public:
                      const uint8_t *loc) const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
+  bool relaxOnce(int pass) const override;
+  void finalizeRelax(int passes) const override;
 };
 } // namespace
+
+// R_RX_RH_RELAX addends (include/elf/rx.h).
+static constexpr uint32_t RX_RELAXA_IMM6 = 0x10;   // li field at bit 6
+static constexpr uint32_t RX_RELAXA_IMM12 = 0x20;  // li field at bit 12
+static constexpr uint32_t RX_RELAXA_BRA = 0x200;   // a branch
+static constexpr uint32_t RX_RELAXA_ALIGN = 0x10000000;
+static constexpr uint32_t RX_RELAXA_ANUM = 0x00ffffff;
 
 RX::RX(Ctx &ctx) : TargetInfo(ctx) {
   // brk
@@ -105,8 +120,9 @@ RelExpr RX::getRelExpr(RelType type, const Symbol &s,
                        const uint8_t *loc) const {
   switch (type) {
   case R_RX_NONE:
-  case R_RX_RH_RELAX:
     return R_NONE;
+  case R_RX_RH_RELAX:
+    return R_RELAX_HINT;
   case R_RX_DIR3U_PCREL:
   case R_RX_DIR8S_PCREL:
   case R_RX_DIR16S_PCREL:
@@ -363,6 +379,244 @@ void RX::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     // the GP-relative ones and the section-based operators (R_RX_OPsctsize,
     // R_RX_OPscttop, R_RX_OPromtop, R_RX_OPramtop) are not supported.
     Err(ctx) << getErrorLoc(ctx, loc) << "unsupported relocation " << rel.type;
+  }
+}
+
+// --- Linker relaxation
+//
+// For each relocation the pass records the bytes deleted up to it
+// (relocDeltas), the relocation's new type (relocTypes) and the bytes that
+// replace the instruction's opcode (writes). An R_RX_RH_RELAX with BRA or IMM
+// rewrites the bytes before the instruction's field; the field's relocation
+// carries the deletion, of the field's top bytes.
+
+// The li field of an immediate, 2 bits at BIT from the start of the
+// instruction (MSB first): 1 = simm8, 2 = simm16, 3 = simm24, 0 = imm32.
+static unsigned immBytesForLi(unsigned li) { return li ? li : 4; }
+
+static bool relaxSection(Ctx &ctx, int pass, InputSection &sec) {
+  const uint64_t secAddr = sec.getVA();
+  const MutableArrayRef<Relocation> relocs = sec.relocs();
+  auto &aux = *sec.relaxAux;
+  ArrayRef<uint8_t> content = sec.content();
+  ArrayRef<SymbolAnchor> sa = ArrayRef(aux.anchors);
+  bool changed = false;
+  uint64_t delta = 0;
+  // The deletion and new type that an R_RX_RH_RELAX decided for the next
+  // relocation (the instruction's field).
+  uint32_t pendingRemove = 0;
+  RelType pendingType = R_RX_NONE;
+
+  std::fill_n(aux.relocTypes.get(), relocs.size(), R_RX_NONE);
+  aux.writes.clear();
+  for (auto [i, r] : llvm::enumerate(relocs)) {
+    const uint64_t loc = secAddr + r.offset - delta;
+    uint32_t &cur = aux.relocDeltas[i], remove = 0;
+    if (pendingType != R_RX_NONE) {
+      aux.relocTypes[i] = pendingType;
+      remove = pendingRemove;
+      pendingType = R_RX_NONE;
+    } else if (r.type == R_RX_RH_RELAX && ctx.arg.relax) {
+      const uint32_t flags = r.addend;
+      const bool hasField = i + 1 < relocs.size();
+      // The bytes the previous pass deleted from this instruction; from pass 4
+      // on it may not grow, so that the passes converge.
+      const uint32_t prev = hasField ? aux.relocDeltas[i + 1] - cur : 0;
+      auto allowed = [&](uint32_t want) {
+        return pass < 4 || want <= prev;
+      };
+      if (flags & RX_RELAXA_ALIGN) {
+        // LLVM's hint: the alignment - 1 NOPs of padding start here; keep
+        // the ones the new address needs.
+        const uint64_t align = flags & RX_RELAXA_ANUM;
+        const uint64_t need = (align - loc % align) % align;
+        if (align == 0 || r.offset + align - 1 > content.size() || need > align - 1) {
+          Err(ctx) << getErrorLoc(ctx, content.data() + r.offset)
+                   << "bad R_RX_RH_RELAX alignment hint " << flags;
+        } else {
+          remove = align - 1 - need;
+          aux.relocTypes[i] = R_RX_RH_RELAX;
+        }
+      } else if ((flags & RX_RELAXA_BRA) && hasField &&
+                 relocs[i + 1].type == R_RX_DIR24S_PCREL &&
+                 relocs[i + 1].offset == r.offset + 1) {
+        // bsr.a / bra.a: the displacement is from the instruction.
+        const Relocation &f = relocs[i + 1];
+        const uint8_t op = content[r.offset];
+        const int64_t disp = int64_t(f.sym->getVA(ctx, f.addend) - loc);
+        uint8_t newOp = 0;
+        RelType newType = R_RX_NONE;
+        uint32_t rem = 0;
+        if (op == 0x04 && isInt<8>(disp) && allowed(2)) { // bra.b
+          newOp = 0x2e, newType = R_RX_DIR8S_PCREL, rem = 2;
+        } else if ((op == 0x04 || op == 0x05) && isInt<16>(disp) &&
+                   allowed(1)) { // bra.w / bsr.w
+          newOp = op == 0x04 ? 0x38 : 0x39, newType = R_RX_DIR16S_PCREL;
+          rem = 1;
+        }
+        if (rem) {
+          aux.relocTypes[i] = R_RX_RH_RELAX;
+          aux.writes.push_back(newOp);
+          pendingType = newType;
+          pendingRemove = rem;
+        }
+      } else if ((flags & (RX_RELAXA_IMM6 | RX_RELAXA_IMM12)) && hasField &&
+                 relocs[i + 1].type == R_RX_DIR32 &&
+                 relocs[i + 1].offset > r.offset &&
+                 relocs[i + 1].offset - r.offset <= 4) {
+        // An immediate with an li field: the smallest size the value takes.
+        const Relocation &f = relocs[i + 1];
+        const unsigned bit = (flags & RX_RELAXA_IMM12) ? 12 : 6;
+        const unsigned prefix = f.offset - r.offset;
+        const int64_t v =
+            int64_t(int32_t(uint32_t(f.sym->getVA(ctx, f.addend))));
+        const uint8_t byte = content[r.offset + bit / 8];
+        const unsigned shift = 6 - bit % 8;
+        if (((byte >> shift) & 3) == 0) { // still imm32
+          unsigned li = isInt<8>(v) ? 1 : isInt<16>(v) ? 2 : isInt<24>(v) ? 3 : 0;
+          while (li && !allowed(4 - immBytesForLi(li)))
+            li = li == 3 ? 0 : li + 1;
+          if (li && bit / 8 < prefix) {
+            aux.relocTypes[i] = R_RX_RH_RELAX;
+            for (unsigned k = 0; k != prefix; ++k) {
+              uint8_t b = content[r.offset + k];
+              if (k == bit / 8)
+                b = (b & ~(3 << shift)) | (li << shift);
+              aux.writes.push_back(b);
+            }
+            pendingType = li == 1 ? R_RX_DIR8S : li == 2 ? R_RX_DIR16S : R_RX_DIR24S;
+            pendingRemove = 4 - immBytesForLi(li);
+          }
+        }
+      }
+    }
+
+    // Anchors at or before this relocation follow the deletions before it.
+    for (; sa.size() && sa[0].offset <= r.offset; sa = sa.slice(1)) {
+      if (sa[0].end)
+        sa[0].d->size = sa[0].offset - delta - sa[0].d->value;
+      else
+        sa[0].d->value = sa[0].offset - delta;
+    }
+    delta += remove;
+    if (delta != cur) {
+      cur = delta;
+      changed = true;
+    }
+  }
+  for (const SymbolAnchor &a : sa) {
+    if (a.end)
+      a.d->size = a.offset - delta - a.d->value;
+    else
+      a.d->value = a.offset - delta;
+  }
+  sec.bytesDropped = delta;
+  return changed;
+}
+
+// Whether SEC can be relaxed: it has R_RX_RH_RELAX and its relocations are in
+// offset order (the deltas assume it).
+static bool hasRelaxHints(const InputSection &sec) {
+  ArrayRef<Relocation> rels = sec.relocs();
+  bool hint = false;
+  for (size_t i = 0; i != rels.size(); ++i) {
+    hint |= rels[i].type == R_RX_RH_RELAX;
+    if (i && rels[i].offset < rels[i - 1].offset)
+      return false;
+  }
+  return hint;
+}
+
+bool RX::relaxOnce(int pass) const {
+  if (!ctx.arg.relax)
+    return false;
+  if (pass == 0)
+    initSymbolAnchors(ctx);
+  SmallVector<InputSection *, 0> storage;
+  bool changed = false;
+  for (OutputSection *osec : ctx.outputSections) {
+    if (!(osec->flags & SHF_EXECINSTR))
+      continue;
+    for (InputSection *sec : getInputSections(*osec, storage))
+      if (sec->relaxAux && sec->relaxAux->relocDeltas && hasRelaxHints(*sec))
+        changed |= relaxSection(ctx, pass, *sec);
+  }
+  return changed;
+}
+
+void RX::finalizeRelax(int passes) const {
+  if (!ctx.arg.relax)
+    return;
+  SmallVector<InputSection *, 0> storage;
+  for (OutputSection *osec : ctx.outputSections) {
+    if (!(osec->flags & SHF_EXECINSTR))
+      continue;
+    for (InputSection *sec : getInputSections(*osec, storage)) {
+      if (!sec->relaxAux || !sec->relaxAux->relocDeltas || !hasRelaxHints(*sec))
+        continue;
+      RelaxAux &aux = *sec->relaxAux;
+      MutableArrayRef<Relocation> rels = sec->relocs();
+      ArrayRef<uint8_t> old = sec->content();
+      const size_t newSize = old.size() - aux.relocDeltas[rels.size() - 1];
+      uint8_t *p = ctx.bAlloc.Allocate<uint8_t>(newSize);
+      size_t writesIdx = 0;
+      uint64_t offset = 0;
+      uint32_t delta = 0;
+      sec->content_ = p;
+      sec->size = newSize;
+      sec->bytesDropped = 0;
+
+      for (size_t i = 0, e = rels.size(); i != e; ++i) {
+        const uint32_t remove = aux.relocDeltas[i] - delta;
+        delta = aux.relocDeltas[i];
+        if (remove == 0 && aux.relocTypes[i] == R_RX_NONE)
+          continue;
+        const Relocation &r = rels[i];
+        memcpy(p, old.data() + offset, r.offset - offset);
+        p += r.offset - offset;
+        uint64_t skip = 0;
+        if (r.type == R_RX_RH_RELAX && (r.addend & RX_RELAXA_ALIGN)) {
+          // Keep the NOPs the alignment needs.
+          skip = (r.addend & RX_RELAXA_ANUM) - 1 - remove;
+          memset(p, 0x03, skip);
+        } else if (r.type == R_RX_RH_RELAX) {
+          // The new opcode bytes, up to the field.
+          skip = i + 1 < e ? rels[i + 1].offset - r.offset : 0;
+          for (uint64_t k = 0; k != skip; ++k)
+            p[k] = aux.writes[writesIdx++];
+        } else {
+          // The field: its low bytes stay, the top ones go.
+          skip = r.type == R_RX_DIR8S || r.type == R_RX_DIR8S_PCREL ? 1
+                 : r.type == R_RX_DIR16S || r.type == R_RX_DIR16S_PCREL ? 2
+                 : 3;
+          if (aux.relocTypes[i] != R_RX_NONE)
+            skip = aux.relocTypes[i] == R_RX_DIR8S ||
+                           aux.relocTypes[i] == R_RX_DIR8S_PCREL
+                       ? 1
+                   : aux.relocTypes[i] == R_RX_DIR16S ||
+                           aux.relocTypes[i] == R_RX_DIR16S_PCREL
+                       ? 2
+                       : 3;
+          memcpy(p, old.data() + r.offset, skip);
+        }
+        p += skip;
+        offset = r.offset + skip + remove;
+      }
+      memcpy(p, old.data() + offset, old.size() - offset);
+
+      // Relocations at one offset (an R_RX_SYM / OP / ABS group) move
+      // together, by the deletions before them.
+      delta = 0;
+      for (size_t i = 0, e = rels.size(); i != e;) {
+        const uint64_t cur = rels[i].offset;
+        do {
+          rels[i].offset -= delta;
+          if (aux.relocTypes[i] != R_RX_NONE && rels[i].type != R_RX_RH_RELAX)
+            rels[i].type = aux.relocTypes[i];
+        } while (++i != e && rels[i].offset == cur);
+        delta = aux.relocDeltas[i - 1];
+      }
+    }
   }
 }
 

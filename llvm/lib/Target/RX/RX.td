@@ -39,6 +39,13 @@ def FeatureFlushDenormals
     : SubtargetFeature<"flush-denormals", "FlushDenormals", "true",
                        "Allow denormals to be flushed to zero everywhere, "
                        "so that the FPU / DFPU can be used">;
+// Linker relaxation, as GNU as -relax: R_RX_RH_RELAX before bsr.a / bra.a
+// to a symbol and before mov.l #sym, and relocations for label differences
+// in code sections (also in the line table and the CFI), so that the linker
+// can shorten these instructions and keep the addresses right.
+def FeatureRelax
+    : SubtargetFeature<"relax", "EnableRelax", "true",
+                       "Emit linker relaxation hints (as GNU as -relax)">;
 // GCC -m64bit-doubles: double is 64 bits. Recorded in e_flags; GNU ld
 // refuses to mix objects that disagree.
 def Feature64BitDoubles

@@ -166,10 +166,12 @@ void RXMCCodeEmitter::encodeInstruction(const MCInst &MI,
       uint32_t Offset = CB.size() - Start;
       SmallVector<MCFixup, 1> InstFixups;
       encodeInstruction(I, CB, InstFixups, STI);
-      for (MCFixup F : InstFixups) {
-        F.setOffset(F.getOffset() + Offset);
-        Fixups.push_back(F);
-      }
+      // A sizeless branch is sized by the assembler; its bra.a is not
+      // marked for the linker (a fragment's linker-relaxable state is fixed
+      // when it is emitted, before relaxation picks the form).
+      for (const MCFixup &F : InstFixups)
+        Fixups.push_back(MCFixup::create(F.getOffset() + Offset, F.getValue(),
+                                         F.getKind(), F.isPCRel()));
     }
     return;
   }
@@ -207,6 +209,9 @@ unsigned RXMCCodeEmitter::getImm32OpValue(const MCInst &MI, unsigned OpNo,
     return static_cast<unsigned>(MO.getImm());
   unsigned Size = MCII.get(MI.getOpcode()).getSize();
   Fixups.push_back(MCFixup::create(Size - 4, MO.getExpr(), FK_Data_4));
+  // The linker may shorten mov.l #sym, rd (RXAsmBackend::recordRelaxHint).
+  if (STI.hasFeature(RX::FeatureRelax) && MI.getOpcode() == RX::MOV_L_ri32)
+    Fixups.back().setLinkerRelaxable();
   return 0;
 }
 
@@ -286,7 +291,11 @@ unsigned
 RXMCCodeEmitter::getBrTarget24OpValue(const MCInst &MI, unsigned OpNo,
                                       SmallVectorImpl<MCFixup> &Fixups,
                                       const MCSubtargetInfo &STI) const {
-  return getBrTargetOpValue(MI, OpNo, Fixups, RX::fixup_rx_pcrel24, 1);
+  unsigned V = getBrTargetOpValue(MI, OpNo, Fixups, RX::fixup_rx_pcrel24, 1);
+  // The linker may shorten bsr.a / bra.a to a symbol (bsr.w, bra.w / .b).
+  if (STI.hasFeature(RX::FeatureRelax) && MI.getOperand(OpNo).isExpr())
+    Fixups.back().setLinkerRelaxable();
+  return V;
 }
 
 MCCodeEmitter *createRXMCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx) {
