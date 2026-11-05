@@ -257,6 +257,22 @@ bool RXDAGToDAGISel::selectDFPU(SDNode *Node) {
   case RXISD::DCMP:
     CurDAG->SelectNodeTo(Node, RX::DCMP_P, MVT::Glue, Op(0), Op(1), Op(2));
     return true;
+  case RXISD::DLOAD:
+  case RXISD::DSTORE: {
+    // (chain, addr) / (chain, d, addr): dmov.d with a (base, dsp) operand,
+    // the displacement scaled by 4 as for mov.l.
+    bool IsLoad = Node->getOpcode() == RXISD::DLOAD;
+    SDValue Base, Disp;
+    selectAddr(Op(IsLoad ? 1 : 2), Base, Disp, 4);
+    MachineSDNode *M =
+        IsLoad ? CurDAG->getMachineNode(RX::DLD_D, DL, MVT::Untyped,
+                                        MVT::Other, {Base, Disp, Op(0)})
+               : CurDAG->getMachineNode(RX::DST_D, DL, MVT::Other,
+                                        {Op(1), Base, Disp, Op(0)});
+    CurDAG->setNodeMemRefs(M, {cast<MemSDNode>(Node)->getMemOperand()});
+    ReplaceNode(Node, M);
+    return true;
+  }
   default:
     return false;
   }
