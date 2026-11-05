@@ -76,6 +76,12 @@ private:
   SDValue emitCMP(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
                   RXCC::CondCode &CC, const SDLoc &DL,
                   SelectionDAG &DAG) const;
+  void computeKnownBitsForTargetNode(const SDValue Op, KnownBits &Known,
+                                     const APInt &DemandedElts,
+                                     const SelectionDAG &DAG,
+                                     unsigned Depth) const override;
+  SDValue emitDFPUUEqOne(SDValue LHS, SDValue RHS, ISD::CondCode Cond,
+                         const SDLoc &DL, SelectionDAG &DAG) const;
 
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
                                bool IsVarArg,
