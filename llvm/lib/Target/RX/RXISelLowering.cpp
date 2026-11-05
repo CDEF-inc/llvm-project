@@ -405,24 +405,34 @@ static SDValue combineDRStore(StoreSDNode *St, SelectionDAG &DAG) {
 
 // minnum / maxnum as compares and selects, for operands the FPU / DFPU can
 // compare. A NaN operand gives the other operand (two NaNs give a NaN),
-// and -0 is below +0: for equal operands, the bits of both ORed (min) or
-// ANDed (max) differ from either operand only for zeros of opposite sign.
+// and -0 is below +0: of equal operands, min takes the one with the sign
+// bit set and max the other. The result is always one of the operands,
+// also where the compares flush denormals (two different denormals compare
+// equal). nnan drops the NaN test, and nsz the one for equal operands.
 static SDValue expandFMinMaxNum(SDNode *N, SelectionDAG &DAG) {
   SDLoc DL(N);
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   EVT VT = N->getValueType(0), IntVT = VT.changeTypeToInteger();
-  EVT CCVT = DAG.getTargetLoweringInfo().getSetCCResultType(
-      DAG.getDataLayout(), *DAG.getContext(), VT);
+  EVT CCVT = TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+  EVT IntCCVT =
+      TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), IntVT);
   SDValue A = N->getOperand(0), B = N->getOperand(1);
   bool Min = N->getOpcode() == ISD::FMINNUM;
+  SDNodeFlags Flags = N->getFlags();
   SDValue R = DAG.getSelect(
       DL, VT, DAG.getSetCC(DL, CCVT, A, B, Min ? ISD::SETOLT : ISD::SETOGT),
       A, B);
-  SDValue Both = DAG.getNode(Min ? ISD::OR : ISD::AND, DL, IntVT,
-                             DAG.getBitcast(IntVT, A), DAG.getBitcast(IntVT, B));
-  R = DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, A, B, ISD::SETOEQ),
-                    DAG.getBitcast(VT, Both), R);
-  return DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, B, B, ISD::SETUO), A,
-                       R);
+  if (!Flags.hasNoSignedZeros()) {
+    SDValue ASign =
+        DAG.getSetCC(DL, IntCCVT, DAG.getBitcast(IntVT, A),
+                     DAG.getConstant(0, DL, IntVT),
+                     Min ? ISD::SETLT : ISD::SETGE);
+    R = DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, A, B, ISD::SETOEQ),
+                      DAG.getSelect(DL, VT, ASign, A, B), R);
+  }
+  if (!Flags.hasNoNaNs())
+    R = DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, B, B, ISD::SETUO), A, R);
+  return R;
 }
 
 // double (+dfpu), before type legalization: DFPU instructions on DR
