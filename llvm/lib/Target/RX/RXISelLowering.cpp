@@ -353,9 +353,17 @@ static SDValue combineDRLoad(SDNode *N, SelectionDAG &DAG) {
   if (Lo->getAlign() < Align(4) || Lo->getChain() != Hi->getChain() ||
       !DAG.areNonVolatileConsecutiveLoads(Hi, Lo, 4, 1))
     return SDValue();
-  MachineFunction &MF = DAG.getMachineFunction();
-  MachineMemOperand *MMO =
-      MF.getMachineMemOperand(Lo->getMemOperand(), 0, LocationSize::precise(8));
+  // The 8-byte access has only what holds for both words: the flags of
+  // both (invariant, dereferenceable, ...) and alias information covering
+  // both.
+  MachineMemOperand *LoMMO = Lo->getMemOperand();
+  MachineMemOperand *HiMMO = Hi->getMemOperand();
+  AAMDNodes AA = LoMMO->getAAInfo();
+  if (AA != HiMMO->getAAInfo())
+    AA = AA.concat(HiMMO->getAAInfo());
+  MachineMemOperand *MMO = DAG.getMachineFunction().getMachineMemOperand(
+      LoMMO->getPointerInfo(), LoMMO->getFlags() & HiMMO->getFlags(),
+      LocationSize::precise(8), LoMMO->getBaseAlign(), AA);
   SDValue D = DAG.getMemIntrinsicNode(
       RXISD::DLOAD, SDLoc(N), DAG.getVTList(MVT::Untyped, MVT::Other),
       {Lo->getChain(), Lo->getBasePtr()}, MVT::f64, MMO);
