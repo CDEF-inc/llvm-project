@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
 
 using namespace llvm;
 
@@ -101,6 +102,9 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
                        STI.hasRXv2() ? Custom : LibCall);
     for (unsigned Op : {ISD::SETCC, ISD::BR_CC, ISD::SELECT_CC})
       setOperationAction(Op, MVT::f32, Custom);
+    // ueq / one need two conditions of fcmp: legalization makes them uo or
+    // oeq, o and une.
+    setCondCodeAction({ISD::SETUEQ, ISD::SETONE}, MVT::f32, Expand);
     setOperationAction(ISD::SELECT, MVT::f32, Expand);
     setOperationAction(ISD::ConstantFP, MVT::f32, Legal);
 
@@ -147,6 +151,11 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
                          ISD::BR_CC, ISD::SELECT_CC, ISD::STORE});
     setOperationAction(ISD::BR_CC, MVT::f64, Custom);
   }
+  // minnum / maxnum become compares and selects before legalization where
+  // the FPU / DFPU can compare (expandFMinMaxNum), and are libcalls
+  // otherwise.
+  if (STI.hasFPU() || STI.hasDFPU())
+    setTargetDAGCombine({ISD::FMINNUM, ISD::FMAXNUM});
 
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
@@ -394,6 +403,28 @@ static SDValue combineDRStore(StoreSDNode *St, SelectionDAG &DAG) {
       St->getMemoryVT(), St->getMemOperand());
 }
 
+// minnum / maxnum as compares and selects, for operands the FPU / DFPU can
+// compare. A NaN operand gives the other operand (two NaNs give a NaN),
+// and -0 is below +0: for equal operands, the bits of both ORed (min) or
+// ANDed (max) differ from either operand only for zeros of opposite sign.
+static SDValue expandFMinMaxNum(SDNode *N, SelectionDAG &DAG) {
+  SDLoc DL(N);
+  EVT VT = N->getValueType(0), IntVT = VT.changeTypeToInteger();
+  EVT CCVT = DAG.getTargetLoweringInfo().getSetCCResultType(
+      DAG.getDataLayout(), *DAG.getContext(), VT);
+  SDValue A = N->getOperand(0), B = N->getOperand(1);
+  bool Min = N->getOpcode() == ISD::FMINNUM;
+  SDValue R = DAG.getSelect(
+      DL, VT, DAG.getSetCC(DL, CCVT, A, B, Min ? ISD::SETOLT : ISD::SETOGT),
+      A, B);
+  SDValue Both = DAG.getNode(Min ? ISD::OR : ISD::AND, DL, IntVT,
+                             DAG.getBitcast(IntVT, A), DAG.getBitcast(IntVT, B));
+  R = DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, A, B, ISD::SETOEQ),
+                    DAG.getBitcast(VT, Both), R);
+  return DAG.getSelect(DL, VT, DAG.getSetCC(DL, CCVT, B, B, ISD::SETUO), A,
+                       R);
+}
+
 // double (+dfpu), before type legalization: DFPU instructions on DR
 // registers for fast-math arithmetic and compares, integer-to-double
 // conversions and, where the result is the IEEE one, the other conversions
@@ -418,6 +449,15 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
   switch (N->getOpcode()) {
   case ISD::STORE:
     return combineDRStore(cast<StoreSDNode>(N), DAG);
+  case ISD::FMINNUM:
+  case ISD::FMAXNUM: {
+    const RXSubtarget &STI = DAG.getSubtarget<RXSubtarget>();
+    EVT VT = N->getValueType(0);
+    if ((VT == MVT::f32 && STI.hasFPU() && canUseFPU(DAG, VT)) ||
+        (VT == MVT::f64 && STI.hasDFPU() && isDFPUOperand(SDValue(N, 0), DAG)))
+      return expandFMinMaxNum(N, DAG);
+    return SDValue();
+  }
   case ISD::FADD:
   case ISD::FSUB:
   case ISD::FMUL:
@@ -503,6 +543,15 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
     bool IsSetCC = N->getOpcode() == ISD::SETCC;
     ISD::CondCode Cond =
         cast<CondCodeSDNode>(N->getOperand(IsSetCC ? 2 : 4))->get();
+    if ((Cond == ISD::SETUEQ || Cond == ISD::SETONE) &&
+        isDFPUOperand(N->getOperand(0), DAG)) {
+      SDValue Bool =
+          emitDFPUUEqOne(N->getOperand(0), N->getOperand(1), Cond, DL, DAG);
+      if (IsSetCC)
+        return DAG.getZExtOrTrunc(Bool, DL, N->getValueType(0));
+      return DAG.getSelect(DL, N->getValueType(0), Bool, N->getOperand(2),
+                           N->getOperand(3));
+    }
     if (!canLowerDFPUCompare(N->getOperand(0), Cond, DAG))
       return SDValue();
     RXCC::CondCode CC;
@@ -517,6 +566,14 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
   }
   case ISD::BR_CC: {
     ISD::CondCode Cond = cast<CondCodeSDNode>(N->getOperand(1))->get();
+    if ((Cond == ISD::SETUEQ || Cond == ISD::SETONE) &&
+        isDFPUOperand(N->getOperand(2), DAG)) {
+      SDValue Bool =
+          emitDFPUUEqOne(N->getOperand(2), N->getOperand(3), Cond, DL, DAG);
+      return DAG.getNode(ISD::BR_CC, DL, MVT::Other, N->getOperand(0),
+                         DAG.getCondCode(ISD::SETNE), Bool,
+                         DAG.getConstant(0, DL, MVT::i32), N->getOperand(4));
+    }
     if (!canLowerDFPUCompare(N->getOperand(2), Cond, DAG))
       return SDValue();
     RXCC::CondCode CC;
@@ -573,7 +630,8 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
     // fcmp sets Z for equal operands, S for LHS < RHS, and only O for
     // unordered ones. N (S = 1) is "ordered and less" and GE (S = O)
     // "ordered and not less"; the other conditions swap the operands or
-    // take the inverse. UEQ and ONE would need two conditions.
+    // take the inverse. UEQ and ONE would need two conditions (legalization
+    // splits them).
     if (canUseFPU(DAG, MVT::f32) && Cond != ISD::SETUEQ &&
         Cond != ISD::SETONE) {
       bool Swap = false;
@@ -631,12 +689,40 @@ SDValue RXTargetLowering::emitCMP(SDValue LHS, SDValue RHS,
   return DAG.getNode(RXISD::CMP, DL, MVT::Glue, LHS, RHS);
 }
 
-// A double compare (only seen with +dfpu) that the DFPU can do; the others
-// keep the default soft-float expansion.
+// A double compare (only seen with +dfpu) that one DFPU compare can do;
+// ueq and one become two (emitDFPUUEqOne), and the others keep the default
+// soft-float expansion.
 bool RXTargetLowering::canLowerDFPUCompare(SDValue LHS, ISD::CondCode Cond,
                                            const SelectionDAG &DAG) const {
   return isDFPUOperand(LHS, DAG) && Cond != ISD::SETUEQ &&
          Cond != ISD::SETONE;
+}
+
+// sc<cond>.l writes 0 or 1.
+void RXTargetLowering::computeKnownBitsForTargetNode(
+    const SDValue Op, KnownBits &Known, const APInt &DemandedElts,
+    const SelectionDAG &DAG, unsigned Depth) const {
+  Known.resetAll();
+  if (Op.getOpcode() == RXISD::SETCC)
+    Known.Zero.setBitsFrom(1);
+}
+
+// A double ueq / one compare as an i32 boolean: unordered or equal, ordered
+// and not equal, from two DFPU compares. Built from RX nodes, since
+// DAGCombiner would fold the same OR / AND of two setccs back.
+SDValue RXTargetLowering::emitDFPUUEqOne(SDValue LHS, SDValue RHS,
+                                         ISD::CondCode Cond, const SDLoc &DL,
+                                         SelectionDAG &DAG) const {
+  bool UEq = Cond == ISD::SETUEQ;
+  auto Bool = [&](ISD::CondCode C) {
+    RXCC::CondCode CC;
+    SDValue Glue = emitCMP(LHS, RHS, C, CC, DL, DAG);
+    return DAG.getNode(RXISD::SETCC, DL, MVT::i32,
+                       DAG.getConstant(CC, DL, MVT::i32), Glue);
+  };
+  return DAG.getNode(UEq ? ISD::OR : ISD::AND, DL, MVT::i32,
+                     Bool(UEq ? ISD::SETUO : ISD::SETO),
+                     Bool(UEq ? ISD::SETOEQ : ISD::SETUNE));
 }
 
 SDValue RXTargetLowering::lowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
