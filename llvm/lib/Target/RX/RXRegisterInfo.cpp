@@ -51,11 +51,11 @@ BitVector RXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     Reserved.set(Reg);
   Reserved.set(RX::ACC0);
   Reserved.set(RX::ACC1);
-  // Code generation uses only DR0 and DR1, the DR registers that rx-rt's
+  // Code generation uses only DR0-DR3, the DR registers that rx-rt's
   // interrupt entry saves (with the dfpu feature); all of them are
   // caller-saved.
   for (MCPhysReg Reg : RX::DPRRegClass)
-    if (Reg != RX::DR0 && Reg != RX::DR1)
+    if (Reg != RX::DR0 && Reg != RX::DR1 && Reg != RX::DR2 && Reg != RX::DR3)
       Reserved.set(Reg);
   return Reserved;
 }
