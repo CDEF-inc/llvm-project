@@ -3101,11 +3101,20 @@ def SDT_RXFromD : SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVT<1, untyped>]>;
 // PSW.Z = x cm y, with cm the DCMPcm condition (eq 2, lt 4, le 6).
 def SDT_RXDCmp : SDTypeProfile<0, 3, [
   SDTCisVT<0, i32>, SDTCisVT<1, untyped>, SDTCisVT<2, untyped>]>;
+// DLOAD: d = the double at addr (dmov.d [addr], dr).
+def SDT_RXDLoad : SDTypeProfile<1, 1, [SDTCisVT<0, untyped>, SDTCisPtrTy<1>]>;
+// DSTORE: the double at addr = d (dmov.d dr, [addr]).
+// Both have a memory operand for all 8 bytes.
+def SDT_RXDStore : SDTypeProfile<0, 2, [SDTCisVT<0, untyped>, SDTCisPtrTy<1>]>;
 
 def RXdrpair  : SDNode<"RXISD::DR_PAIR", SDT_RXDRPair>;
 def RXdrsplit : SDNode<"RXISD::DR_SPLIT", SDT_RXDRSplit>;
 def RXdarith  : SDNode<"RXISD::DARITH", SDT_RXDArith>;
 def RXdsqrt   : SDNode<"RXISD::DSQRT", SDT_RXDUnary>;
+def RXdload   : SDNode<"RXISD::DLOAD", SDT_RXDLoad,
+                       [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+def RXdstore  : SDNode<"RXISD::DSTORE", SDT_RXDStore,
+                       [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
 def RXitod    : SDNode<"RXISD::ITOD", SDT_RXToD>;
 def RXutod    : SDNode<"RXISD::UTOD", SDT_RXToD>;
 def RXftod    : SDNode<"RXISD::FTOD", SDT_RXToD>;
@@ -3129,9 +3138,9 @@ def DR_LO_P : RXPseudo<(outs GPR:$r), (ins DPR:$d)>;
 let Size = 7, Defs = [PSW] in
 def DCMP_P : RXPseudo<(outs), (ins i32imm:$cm, DPR:$x, DPR:$y)>;
 
-// Spills and reloads of DR registers: dmov.d with a (base, dsp) memory
-// operand like LD_L (RXMCInstLower picks the displacement form; the
-// displacement is scaled by 4).
+// Spills and reloads of DR registers, and the DLOAD / DSTORE nodes: dmov.d
+// with a (base, dsp) memory operand like LD_L (RXMCInstLower picks the
+// displacement form; the displacement is scaled by 4).
 let Size = 6 in {
 let mayStore = 1 in
 def DST_D : RXPseudo<(outs), (ins DPR:$d, mem:$a)>;
