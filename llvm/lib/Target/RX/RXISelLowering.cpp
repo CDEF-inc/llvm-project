@@ -334,30 +334,33 @@ static bool isDMovAccess(const LSBaseSDNode *M) {
          M->getMemoryVT().getStoreSize() == 8 && M->getAlign() >= Align(4);
 }
 
-// DR_PAIR(lo, hi) of the two words of a double loaded from memory and used
-// for nothing else: dmov.d [addr], dr instead of two loads and two DR
-// transfers.
+// DR_PAIR(lo, hi) of two plain word loads from consecutive addresses (what
+// type legalization makes of a double load), used for nothing else:
+// dmov.d [addr], dr instead of two loads and two DR transfers. Matching
+// after type legalization, rather than the double load before it, also
+// catches a double that several DFPU operations use.
 static SDValue combineDRLoad(SDNode *N, SelectionDAG &DAG) {
-  SDValue Lo = N->getOperand(0), Hi = N->getOperand(1);
-  if (Lo.getOpcode() != ISD::EXTRACT_ELEMENT ||
-      Hi.getOpcode() != ISD::EXTRACT_ELEMENT ||
-      Lo.getOperand(0) != Hi.getOperand(0) ||
-      Lo.getConstantOperandVal(1) != 0 || Hi.getConstantOperandVal(1) != 1 ||
-      !Lo.hasOneUse() || !Hi.hasOneUse())
+  SDValue LoV = N->getOperand(0), HiV = N->getOperand(1);
+  auto *Lo = dyn_cast<LoadSDNode>(LoV);
+  auto *Hi = dyn_cast<LoadSDNode>(HiV);
+  if (!Lo || !Hi || !LoV.hasOneUse() || !HiV.hasOneUse())
     return SDValue();
-  SDValue Bits = Lo.getOperand(0);
-  if (!Bits->hasNUsesOfValue(2, Bits.getResNo()))
+  for (LoadSDNode *Ld : {Lo, Hi})
+    if (!Ld->isSimple() || !Ld->isUnindexed() ||
+        Ld->getExtensionType() != ISD::NON_EXTLOAD ||
+        Ld->getMemoryVT() != MVT::i32)
+      return SDValue();
+  if (Lo->getAlign() < Align(4) || Lo->getChain() != Hi->getChain() ||
+      !DAG.areNonVolatileConsecutiveLoads(Hi, Lo, 4, 1))
     return SDValue();
-  SDValue V = Bits.getOpcode() == ISD::BITCAST ? Bits.getOperand(0) : Bits;
-  auto *Ld = dyn_cast<LoadSDNode>(V);
-  if (!Ld || Ld->getExtensionType() != ISD::NON_EXTLOAD || !isDMovAccess(Ld) ||
-      (V != Bits && !V.hasOneUse()))
-    return SDValue();
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachineMemOperand *MMO =
+      MF.getMachineMemOperand(Lo->getMemOperand(), 0, LocationSize::precise(8));
   SDValue D = DAG.getMemIntrinsicNode(
       RXISD::DLOAD, SDLoc(N), DAG.getVTList(MVT::Untyped, MVT::Other),
-      {Ld->getChain(), Ld->getBasePtr()}, Ld->getMemoryVT(),
-      Ld->getMemOperand());
-  DAG.ReplaceAllUsesOfValueWith(SDValue(Ld, 1), D.getValue(1));
+      {Lo->getChain(), Lo->getBasePtr()}, MVT::f64, MMO);
+  DAG.ReplaceAllUsesOfValueWith(SDValue(Lo, 1), D.getValue(1));
+  DAG.ReplaceAllUsesOfValueWith(SDValue(Hi, 1), D.getValue(1));
   return D;
 }
 
@@ -387,9 +390,9 @@ static SDValue combineDRStore(StoreSDNode *St, SelectionDAG &DAG) {
 // conversions and, where the result is the IEEE one, the other conversions
 // (see below). Everything else is left to the default soft-float expansion.
 // In every phase, DR_PAIR(DR_SPLIT(d)) folds to d, so that a double computed
-// by the DFPU and used by it stays in its DR register. Before type
-// legalization, a double loaded into or stored from a DR register uses
-// dmov.d (combineDRLoad, combineDRStore).
+// by the DFPU and used by it stays in its DR register. A double loaded into
+// a DR register (in every phase, combineDRLoad) or stored from one (before
+// type legalization, combineDRStore) uses dmov.d.
 SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
                                             DAGCombinerInfo &DCI) const {
   SelectionDAG &DAG = DCI.DAG;
@@ -399,9 +402,7 @@ SDValue RXTargetLowering::PerformDAGCombine(SDNode *N,
     if (Lo.getOpcode() == RXISD::DR_SPLIT && Hi.getNode() == Lo.getNode() &&
         Lo.getResNo() == 0 && Hi.getResNo() == 1)
       return Lo.getOperand(0);
-    if (DCI.isBeforeLegalize())
-      return combineDRLoad(N, DAG);
-    return SDValue();
+    return combineDRLoad(N, DAG);
   }
   if (!DCI.isBeforeLegalize())
     return SDValue();
