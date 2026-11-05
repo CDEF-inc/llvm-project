@@ -355,7 +355,8 @@ static SDValue combineDRLoad(SDNode *N, SelectionDAG &DAG) {
     return SDValue();
   // The 8-byte access has only what holds for both words: the flags of
   // both (invariant, dereferenceable, ...) and alias information covering
-  // both.
+  // both. Its alignment is that of its address, Lo's (Hi's address is 4
+  // more, so Hi's alignment says nothing more about it).
   MachineMemOperand *LoMMO = Lo->getMemOperand();
   MachineMemOperand *HiMMO = Hi->getMemOperand();
   AAMDNodes AA = LoMMO->getAAInfo();

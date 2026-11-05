@@ -3101,8 +3101,10 @@ def SDT_RXFromD : SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVT<1, untyped>]>;
 // PSW.Z = x cm y, with cm the DCMPcm condition (eq 2, lt 4, le 6).
 def SDT_RXDCmp : SDTypeProfile<0, 3, [
   SDTCisVT<0, i32>, SDTCisVT<1, untyped>, SDTCisVT<2, untyped>]>;
-// d = [addr] / [addr] = d, for dmov.d (the memory operand is the double's).
+// DLOAD: d = the double at addr (dmov.d [addr], dr).
 def SDT_RXDLoad : SDTypeProfile<1, 1, [SDTCisVT<0, untyped>, SDTCisPtrTy<1>]>;
+// DSTORE: the double at addr = d (dmov.d dr, [addr]).
+// Both have a memory operand for all 8 bytes.
 def SDT_RXDStore : SDTypeProfile<0, 2, [SDTCisVT<0, untyped>, SDTCisPtrTy<1>]>;
 
 def RXdrpair  : SDNode<"RXISD::DR_PAIR", SDT_RXDRPair>;
