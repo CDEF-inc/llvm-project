@@ -3078,7 +3078,7 @@ def : Pat<(fsqrt (f32 (load AddrL:$m))), (FSQRT_mP AddrL:$m)>;
 // moves it back, and a DR_PAIR of a DR_SPLIT folds away, so a chain of
 // operations keeps its values in DR registers. RXISelDAGToDAG selects them;
 // the register-pair moves are pseudos that RXAsmPrinter expands into
-// DMOV.L transfers. Only DR0 and DR1 are allocatable (see getReservedRegs).
+// DMOV.L transfers. Only DR0-DR3 are allocatable (see getReservedRegs).
 //===----------------------------------------------------------------------===//
 
 // d = DR(lo, hi) / (lo, hi) = d
