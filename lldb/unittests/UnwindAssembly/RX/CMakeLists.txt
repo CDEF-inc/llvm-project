@@ -1,0 +1,14 @@
+add_lldb_unittest(RXInstEmulationTests
+  TestRXInstEmulation.cpp
+  LINK_COMPONENTS
+    Support
+    ${LLVM_TARGETS_TO_BUILD}
+  LINK_LIBS
+    lldbCore
+    lldbSymbol
+    lldbTarget
+    lldbPluginUnwindAssemblyInstEmulation
+    lldbPluginDisassemblerLLVMC
+    lldbPluginInstructionRX
+    lldbPluginProcessUtility
+  )
