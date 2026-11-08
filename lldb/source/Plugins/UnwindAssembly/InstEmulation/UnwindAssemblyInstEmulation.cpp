@@ -117,8 +117,13 @@ bool UnwindAssemblyInstEmulation::GetNonCallSiteUnwindPlanFromAssembly(
 
   m_pushed_regs.clear();
 
+  // On entry the CFA register may be below the CFA (CFA = sp + 4 on RX, where
+  // the call pushed the return address): start it there, so that the
+  // offsets computed from m_initial_cfa below are from the CFA.
   RegisterValue cfa_reg_value;
-  cfa_reg_value.SetUInt(m_initial_cfa, m_state.cfa_reg_info.byte_size);
+  cfa_reg_value.SetUInt(m_initial_cfa -
+                            unwind_plan.GetRowAtIndex(0)->GetCFAValue().GetOffset(),
+                        m_state.cfa_reg_info.byte_size);
   SetRegisterValue(m_state.cfa_reg_info, cfa_reg_value);
 
   InstructionList inst_list = disasm_sp->GetInstructionList();
