@@ -1,0 +1,11 @@
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3 --disassemble %s \
+# RUN:   | FileCheck %s
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble %s \
+# RUN:   | FileCheck %s
+
+# One instruction per line.
+# Values sit on the boundaries where GNU as switches encodings.
+# The encodings of MC/RX/basic-rxv3.s; the text reassembles to the same bytes.
+
+0xff,0x63,0x12
+# CHECK: xor r1, r2, r3

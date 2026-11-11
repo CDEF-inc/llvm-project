@@ -1,0 +1,77 @@
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv2 -show-encoding %s \
+# RUN:   | FileCheck %s
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e -show-encoding %s \
+# RUN:   | FileCheck %s
+
+# Memory operands with a size extension (memex) of the ALU, xchg and
+# itof / utof instructions, push from memory, and the bit operations,
+# compared with GNU as. Without a size extension
+# a memex source is .L; the bit operations' memory operand is [Rd].B.
+# The instructions that need rxv2.
+# The encodings match GNU as 2.43 (rx-elf).
+utof	[r1].ub, r2
+# CHECK: utof [r1].ub, r2 ; encoding: [0xfc,0x54,0x12]
+utof	0[r3].ub, r2
+# CHECK: utof [r3].ub, r2 ; encoding: [0xfc,0x54,0x32]
+utof	1[r3].ub, r2
+# CHECK: utof 1[r3].ub, r2 ; encoding: [0xfc,0x55,0x32,0x01]
+utof	255[r3].ub, r14
+# CHECK: utof 255[r3].ub, r14 ; encoding: [0xfc,0x55,0x3e,0xff]
+utof	256[r3].ub, r2
+# CHECK: utof 256[r3].ub, r2 ; encoding: [0xfc,0x56,0x32,0x00,0x01]
+utof	65535[r3].ub, r2
+# CHECK: utof 65535[r3].ub, r2 ; encoding: [0xfc,0x56,0x32,0xff,0xff]
+utof	[r1].b, r2
+# CHECK: utof [r1].b, r2 ; encoding: [0x06,0x20,0x15,0x12]
+utof	0[r3].b, r2
+# CHECK: utof [r3].b, r2 ; encoding: [0x06,0x20,0x15,0x32]
+utof	1[r3].b, r2
+# CHECK: utof 1[r3].b, r2 ; encoding: [0x06,0x21,0x15,0x32,0x01]
+utof	255[r3].b, r14
+# CHECK: utof 255[r3].b, r14 ; encoding: [0x06,0x21,0x15,0x3e,0xff]
+utof	256[r3].b, r2
+# CHECK: utof 256[r3].b, r2 ; encoding: [0x06,0x22,0x15,0x32,0x00,0x01]
+utof	65535[r3].b, r2
+# CHECK: utof 65535[r3].b, r2 ; encoding: [0x06,0x22,0x15,0x32,0xff,0xff]
+utof	[r1].w, r2
+# CHECK: utof [r1].w, r2 ; encoding: [0x06,0x60,0x15,0x12]
+utof	0[r3].w, r2
+# CHECK: utof [r3].w, r2 ; encoding: [0x06,0x60,0x15,0x32]
+utof	2[r3].w, r2
+# CHECK: utof 2[r3].w, r2 ; encoding: [0x06,0x61,0x15,0x32,0x01]
+utof	510[r3].w, r2
+# CHECK: utof 510[r3].w, r2 ; encoding: [0x06,0x61,0x15,0x32,0xff]
+utof	512[r3].w, r2
+# CHECK: utof 512[r3].w, r2 ; encoding: [0x06,0x62,0x15,0x32,0x00,0x01]
+utof	131070[r3].w, r2
+# CHECK: utof 131070[r3].w, r2 ; encoding: [0x06,0x62,0x15,0x32,0xff,0xff]
+utof	[r1].l, r2
+# CHECK: utof [r1].l, r2 ; encoding: [0x06,0xa0,0x15,0x12]
+utof	0[r3].l, r2
+# CHECK: utof [r3].l, r2 ; encoding: [0x06,0xa0,0x15,0x32]
+utof	4[r3].l, r2
+# CHECK: utof 4[r3].l, r2 ; encoding: [0x06,0xa1,0x15,0x32,0x01]
+utof	1020[r3].l, r2
+# CHECK: utof 1020[r3].l, r2 ; encoding: [0x06,0xa1,0x15,0x32,0xff]
+utof	1024[r3].l, r2
+# CHECK: utof 1024[r3].l, r2 ; encoding: [0x06,0xa2,0x15,0x32,0x00,0x01]
+utof	262140[r3].l, r2
+# CHECK: utof 262140[r3].l, r2 ; encoding: [0x06,0xa2,0x15,0x32,0xff,0xff]
+utof	[r15], r0
+# CHECK: utof [r15].l, r0 ; encoding: [0x06,0xa0,0x15,0xf0]
+utof	[r1].uw, r2
+# CHECK: utof [r1].uw, r2 ; encoding: [0x06,0xe0,0x15,0x12]
+utof	0[r3].uw, r2
+# CHECK: utof [r3].uw, r2 ; encoding: [0x06,0xe0,0x15,0x32]
+utof	2[r3].uw, r2
+# CHECK: utof 2[r3].uw, r2 ; encoding: [0x06,0xe1,0x15,0x32,0x01]
+utof	510[r3].uw, r2
+# CHECK: utof 510[r3].uw, r2 ; encoding: [0x06,0xe1,0x15,0x32,0xff]
+utof	512[r3].uw, r2
+# CHECK: utof 512[r3].uw, r2 ; encoding: [0x06,0xe2,0x15,0x32,0x00,0x01]
+utof	131070[r3].uw, r2
+# CHECK: utof 131070[r3].uw, r2 ; encoding: [0x06,0xe2,0x15,0x32,0xff,0xff]
+utof	[r1], r2
+# CHECK: utof [r1].l, r2 ; encoding: [0x06,0xa0,0x15,0x12]
+utof	4[r1], r2
+# CHECK: utof 4[r1].l, r2 ; encoding: [0x06,0xa1,0x15,0x12,0x01]

@@ -1,0 +1,43 @@
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv1 --disassemble %s \
+# RUN:   | FileCheck %s --check-prefix=RXV1
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble %s \
+# RUN:   | FileCheck %s --check-prefix=RXV3E
+
+# DSP (accumulator) instructions: the RXv1 forms with the implicit A0, then
+# the forms that name A0 / A1.
+# The encodings of MC/RX/dsp.s; the text reassembles to the same bytes.
+# rxv1 and later CPUs decode some of them to different forms.
+
+0xfd,0x00,0x12
+# RXV1: mulhi r1, r2
+# RXV3E: mulhi r1, r2, a0
+0xfd,0x01,0x34
+# RXV1: mullo r3, r4
+# RXV3E: mullo r3, r4, a0
+0xfd,0x04,0x56
+# RXV1: machi r5, r6
+# RXV3E: machi r5, r6, a0
+0xfd,0x05,0x78
+# RXV1: maclo r7, r8
+# RXV3E: maclo r7, r8, a0
+0xfd,0x17,0x09
+# RXV1: mvtachi r9
+# RXV3E: mvtachi r9, a0
+0xfd,0x17,0x1a
+# RXV1: mvtaclo r10
+# RXV3E: mvtaclo r10, a0
+0xfd,0x1f,0x0b
+# RXV1: mvfachi r11
+# RXV3E: mvfachi #0, a0, r11
+0xfd,0x1f,0x2c
+# RXV1: mvfacmi r12
+# RXV3E: mvfacmi #0, a0, r12
+0xfd,0x1f,0x1d
+# RXV1: mvfaclo r13
+# RXV3E: mvfaclo #0, a0, r13
+0xfd,0x18,0x00
+# RXV1: racw #1
+# RXV3E: racw #1, a0
+0xfd,0x18,0x10
+# RXV1: racw #2
+# RXV3E: racw #2, a0

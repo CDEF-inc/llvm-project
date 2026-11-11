@@ -1,0 +1,454 @@
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv1 -show-encoding %s \
+# RUN:   | FileCheck %s
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e -show-encoding %s \
+# RUN:   | FileCheck %s
+
+# One instruction per line.
+# Values sit on the boundaries where GNU as switches encodings.
+# The encodings match GNU as 2.43 (rx-elf).
+
+# --- mov register / immediate
+mov.b r1, r2
+# CHECK: mov.b r1, r2 ; encoding: [0xcf,0x12]
+mov.w r1, r15
+# CHECK: mov.w r1, r15 ; encoding: [0xdf,0x1f]
+mov.l r15, r0
+# CHECK: mov.l r15, r0 ; encoding: [0xef,0xf0]
+mov.l #0, r1
+# CHECK: mov.l #0, r1 ; encoding: [0x66,0x01]
+mov.l #15, r1
+# CHECK: mov.l #15, r1 ; encoding: [0x66,0xf1]
+mov.l #16, r1
+# CHECK: mov.l #16, r1 ; encoding: [0x75,0x41,0x10]
+mov.l #255, r15
+# CHECK: mov.l #255, r15 ; encoding: [0x75,0x4f,0xff]
+mov.l #256, r1
+# CHECK: mov.l #256, r1 ; encoding: [0xfb,0x1a,0x00,0x01]
+mov.l #-1, r1
+# CHECK: mov.l #-1, r1 ; encoding: [0xfb,0x16,0xff]
+mov.l #-128, r1
+# CHECK: mov.l #-128, r1 ; encoding: [0xfb,0x16,0x80]
+mov.l #-129, r1
+# CHECK: mov.l #-129, r1 ; encoding: [0xfb,0x1a,0x7f,0xff]
+mov.l #32767, r1
+# CHECK: mov.l #32767, r1 ; encoding: [0xfb,0x1a,0xff,0x7f]
+mov.l #32768, r1
+# CHECK: mov.l #32768, r1 ; encoding: [0xfb,0x1e,0x00,0x80,0x00]
+mov.l #-32768, r1
+# CHECK: mov.l #-32768, r1 ; encoding: [0xfb,0x1a,0x00,0x80]
+mov.l #-32769, r1
+# CHECK: mov.l #-32769, r1 ; encoding: [0xfb,0x1e,0xff,0x7f,0xff]
+mov.l #0x7fffff, r1
+# CHECK: mov.l #8388607, r1 ; encoding: [0xfb,0x1e,0xff,0xff,0x7f]
+mov.l #0x800000, r1
+# CHECK: mov.l #8388608, r1 ; encoding: [0xfb,0x12,0x00,0x00,0x80,0x00]
+mov.l #-0x800000, r1
+# CHECK: mov.l #-8388608, r1 ; encoding: [0xfb,0x1e,0x00,0x00,0x80]
+mov.l #-0x800001, r1
+# CHECK: mov.l #-8388609, r1 ; encoding: [0xfb,0x12,0xff,0xff,0x7f,0xff]
+mov.l #0x7fffffff, r1
+# CHECK: mov.l #2147483647, r1 ; encoding: [0xfb,0x12,0xff,0xff,0xff,0x7f]
+mov.l #0x80000000, r1
+# CHECK: mov.l #2147483648, r1 ; encoding: [0xfb,0x12,0x00,0x00,0x00,0x80]
+mov.l #0xffffffff, r1
+# CHECK: mov.l #4294967295, r1 ; encoding: [0xfb,0x16,0xff]
+mov.l #0xffffff80, r1
+# CHECK: mov.l #4294967168, r1 ; encoding: [0xfb,0x16,0x80]
+
+# --- mov loads
+mov.b [r1], r2
+# CHECK: mov.b [r1], r2 ; encoding: [0xcc,0x12]
+mov.w [r9], r10
+# CHECK: mov.w [r9], r10 ; encoding: [0xdc,0x9a]
+mov.l [r15], r0
+# CHECK: mov.l [r15], r0 ; encoding: [0xec,0xf0]
+mov.b 0[r1], r2
+# CHECK: mov.b 0[r1], r2 ; encoding: [0x88,0x12]
+mov.b 31[r7], r7
+# CHECK: mov.b 31[r7], r7 ; encoding: [0x8f,0xff]
+mov.b 32[r1], r2
+# CHECK: mov.b 32[r1], r2 ; encoding: [0xcd,0x12,0x20]
+mov.b 255[r1], r2
+# CHECK: mov.b 255[r1], r2 ; encoding: [0xcd,0x12,0xff]
+mov.b 256[r1], r2
+# CHECK: mov.b 256[r1], r2 ; encoding: [0xce,0x12,0x00,0x01]
+mov.b 65535[r1], r2
+# CHECK: mov.b 65535[r1], r2 ; encoding: [0xce,0x12,0xff,0xff]
+mov.b 4[r8], r2
+# CHECK: mov.b 4[r8], r2 ; encoding: [0xcd,0x82,0x04]
+mov.b 4[r1], r8
+# CHECK: mov.b 4[r1], r8 ; encoding: [0xcd,0x18,0x04]
+mov.b 0[r9], r2
+# CHECK: mov.b [r9], r2 ; encoding: [0xcc,0x92]
+movu.w 0[r12], r1
+# CHECK: movu.w [r12], r1 ; encoding: [0x5c,0xc1]
+mov.w 2[r1], r2
+# CHECK: mov.w 2[r1], r2 ; encoding: [0x98,0x1a]
+mov.w 62[r1], r2
+# CHECK: mov.w 62[r1], r2 ; encoding: [0x9f,0x9a]
+mov.w 64[r1], r2
+# CHECK: mov.w 64[r1], r2 ; encoding: [0xdd,0x12,0x20]
+mov.w 510[r1], r2
+# CHECK: mov.w 510[r1], r2 ; encoding: [0xdd,0x12,0xff]
+mov.w 512[r1], r2
+# CHECK: mov.w 512[r1], r2 ; encoding: [0xde,0x12,0x00,0x01]
+mov.w 131070[r1], r2
+# CHECK: mov.w 131070[r1], r2 ; encoding: [0xde,0x12,0xff,0xff]
+mov.l 4[r1], r2
+# CHECK: mov.l 4[r1], r2 ; encoding: [0xa8,0x1a]
+mov.l 124[r1], r2
+# CHECK: mov.l 124[r1], r2 ; encoding: [0xaf,0x9a]
+mov.l 128[r1], r2
+# CHECK: mov.l 128[r1], r2 ; encoding: [0xed,0x12,0x20]
+mov.l 1020[r1], r2
+# CHECK: mov.l 1020[r1], r2 ; encoding: [0xed,0x12,0xff]
+mov.l 1024[r1], r2
+# CHECK: mov.l 1024[r1], r2 ; encoding: [0xee,0x12,0x00,0x01]
+mov.l 262140[r1], r2
+# CHECK: mov.l 262140[r1], r2 ; encoding: [0xee,0x12,0xff,0xff]
+mov.l 8[r14], r15
+# CHECK: mov.l 8[r14], r15 ; encoding: [0xed,0xef,0x02]
+
+# --- mov stores
+mov.b r2, [r1]
+# CHECK: mov.b r2, [r1] ; encoding: [0xc3,0x12]
+mov.w r10, [r9]
+# CHECK: mov.w r10, [r9] ; encoding: [0xd3,0x9a]
+mov.l r0, [r15]
+# CHECK: mov.l r0, [r15] ; encoding: [0xe3,0xf0]
+mov.b r2, 0[r1]
+# CHECK: mov.b r2, 0[r1] ; encoding: [0x80,0x12]
+mov.b r7, 31[r7]
+# CHECK: mov.b r7, 31[r7] ; encoding: [0x87,0xff]
+mov.b r2, 32[r1]
+# CHECK: mov.b r2, 32[r1] ; encoding: [0xc7,0x12,0x20]
+mov.b r2, 256[r1]
+# CHECK: mov.b r2, 256[r1] ; encoding: [0xcb,0x12,0x00,0x01]
+mov.b r8, 4[r1]
+# CHECK: mov.b r8, 4[r1] ; encoding: [0xc7,0x18,0x04]
+mov.l r2, 0[r9]
+# CHECK: mov.l r2, [r9] ; encoding: [0xe3,0x92]
+mov.w r9, 0[r1]
+# CHECK: mov.w r9, [r1] ; encoding: [0xd3,0x19]
+mov.w r2, 62[r1]
+# CHECK: mov.w r2, 62[r1] ; encoding: [0x97,0x9a]
+mov.w r2, 64[r1]
+# CHECK: mov.w r2, 64[r1] ; encoding: [0xd7,0x12,0x20]
+mov.w r2, 512[r1]
+# CHECK: mov.w r2, 512[r1] ; encoding: [0xdb,0x12,0x00,0x01]
+mov.l r2, 124[r1]
+# CHECK: mov.l r2, 124[r1] ; encoding: [0xa7,0x9a]
+mov.l r2, 128[r1]
+# CHECK: mov.l r2, 128[r1] ; encoding: [0xe7,0x12,0x20]
+mov.l r2, 1024[r1]
+# CHECK: mov.l r2, 1024[r1] ; encoding: [0xeb,0x12,0x00,0x01]
+mov.l r15, 262140[r14]
+# CHECK: mov.l r15, 262140[r14] ; encoding: [0xeb,0xef,0xff,0xff]
+
+# --- movu
+movu.b r1, r2
+# CHECK: movu.b r1, r2 ; encoding: [0x5b,0x12]
+movu.w r15, r0
+# CHECK: movu.w r15, r0 ; encoding: [0x5f,0xf0]
+movu.b [r1], r2
+# CHECK: movu.b [r1], r2 ; encoding: [0x58,0x12]
+movu.w [r9], r10
+# CHECK: movu.w [r9], r10 ; encoding: [0x5c,0x9a]
+movu.b 31[r1], r2
+# CHECK: movu.b 31[r1], r2 ; encoding: [0xb7,0x9a]
+movu.b 32[r1], r2
+# CHECK: movu.b 32[r1], r2 ; encoding: [0x59,0x12,0x20]
+movu.b 256[r1], r2
+# CHECK: movu.b 256[r1], r2 ; encoding: [0x5a,0x12,0x00,0x01]
+movu.w 62[r7], r1
+# CHECK: movu.w 62[r7], r1 ; encoding: [0xbf,0xf9]
+movu.w 64[r1], r2
+# CHECK: movu.w 64[r1], r2 ; encoding: [0x5d,0x12,0x20]
+movu.w 512[r1], r2
+# CHECK: movu.w 512[r1], r2 ; encoding: [0x5e,0x12,0x00,0x01]
+movu.b 4[r8], r1
+# CHECK: movu.b 4[r8], r1 ; encoding: [0x59,0x81,0x04]
+
+# --- add
+add r1, r2
+# CHECK: add r1, r2 ; encoding: [0x4b,0x12]
+add r15, r0
+# CHECK: add r15, r0 ; encoding: [0x4b,0xf0]
+add #0, r1
+# CHECK: add #0, r1 ; encoding: [0x62,0x01]
+add #15, r1
+# CHECK: add #15, r1 ; encoding: [0x62,0xf1]
+add #16, r1
+# CHECK: add #16, r1, r1 ; encoding: [0x71,0x11,0x10]
+add #127, r1
+# CHECK: add #127, r1, r1 ; encoding: [0x71,0x11,0x7f]
+add #128, r1
+# CHECK: add #128, r1, r1 ; encoding: [0x72,0x11,0x80,0x00]
+add #-1, r1
+# CHECK: add #-1, r1, r1 ; encoding: [0x71,0x11,0xff]
+add #-128, r1
+# CHECK: add #-128, r1, r1 ; encoding: [0x71,0x11,0x80]
+add #-129, r1
+# CHECK: add #-129, r1, r1 ; encoding: [0x72,0x11,0x7f,0xff]
+add #32767, r1
+# CHECK: add #32767, r1, r1 ; encoding: [0x72,0x11,0xff,0x7f]
+add #32768, r1
+# CHECK: add #32768, r1, r1 ; encoding: [0x73,0x11,0x00,0x80,0x00]
+add #0x800000, r1
+# CHECK: add #8388608, r1, r1 ; encoding: [0x70,0x11,0x00,0x00,0x80,0x00]
+add #0xffffffff, r1
+# CHECK: add #4294967295, r1, r1 ; encoding: [0x71,0x11,0xff]
+add #1, r2, r3
+# CHECK: add #1, r2, r3 ; encoding: [0x71,0x23,0x01]
+add #128, r2, r3
+# CHECK: add #128, r2, r3 ; encoding: [0x72,0x23,0x80,0x00]
+add #0x12345678, r15, r14
+# CHECK: add #305419896, r15, r14 ; encoding: [0x70,0xfe,0x78,0x56,0x34,0x12]
+add r1, r2, r3
+# CHECK: add r1, r2, r3 ; encoding: [0xff,0x23,0x12]
+add r15, r14, r13
+# CHECK: add r15, r14, r13 ; encoding: [0xff,0x2d,0xfe]
+
+# --- sub
+sub r1, r2
+# CHECK: sub r1, r2 ; encoding: [0x43,0x12]
+sub #0, r1
+# CHECK: sub #0, r1 ; encoding: [0x60,0x01]
+sub #15, r1
+# CHECK: sub #15, r1 ; encoding: [0x60,0xf1]
+sub #16, r1
+# CHECK: add #-16, r1, r1 ; encoding: [0x71,0x11,0xf0]
+sub #1000, r1
+# CHECK: add #-1000, r1, r1 ; encoding: [0x72,0x11,0x18,0xfc]
+sub #-1, r1
+# CHECK: add #1, r1, r1 ; encoding: [0x71,0x11,0x01]
+sub r1, r2, r3
+# CHECK: sub r1, r2, r3 ; encoding: [0xff,0x03,0x12]
+
+# --- cmp
+cmp r1, r2
+# CHECK: cmp r1, r2 ; encoding: [0x47,0x12]
+cmp #0, r1
+# CHECK: cmp #0, r1 ; encoding: [0x61,0x01]
+cmp #15, r1
+# CHECK: cmp #15, r1 ; encoding: [0x61,0xf1]
+cmp #16, r1
+# CHECK: cmp #16, r1 ; encoding: [0x75,0x51,0x10]
+cmp #255, r1
+# CHECK: cmp #255, r1 ; encoding: [0x75,0x51,0xff]
+cmp #256, r1
+# CHECK: cmp #256, r1 ; encoding: [0x76,0x01,0x00,0x01]
+cmp #-1, r1
+# CHECK: cmp #-1, r1 ; encoding: [0x75,0x01,0xff]
+cmp #-128, r1
+# CHECK: cmp #-128, r1 ; encoding: [0x75,0x01,0x80]
+cmp #-129, r1
+# CHECK: cmp #-129, r1 ; encoding: [0x76,0x01,0x7f,0xff]
+cmp #0x12345678, r1
+# CHECK: cmp #305419896, r1 ; encoding: [0x74,0x01,0x78,0x56,0x34,0x12]
+
+# --- mul / and / or
+mul r1, r2
+# CHECK: mul r1, r2 ; encoding: [0x4f,0x12]
+mul #3, r1
+# CHECK: mul #3, r1 ; encoding: [0x63,0x31]
+mul #16, r1
+# CHECK: mul #16, r1 ; encoding: [0x75,0x11,0x10]
+mul #-1, r1
+# CHECK: mul #-1, r1 ; encoding: [0x75,0x11,0xff]
+mul #1000, r1
+# CHECK: mul #1000, r1 ; encoding: [0x76,0x11,0xe8,0x03]
+mul #0x100000, r1
+# CHECK: mul #1048576, r1 ; encoding: [0x77,0x11,0x00,0x00,0x10]
+mul #0x10000000, r1
+# CHECK: mul #268435456, r1 ; encoding: [0x74,0x11,0x00,0x00,0x00,0x10]
+mul r1, r2, r3
+# CHECK: mul r1, r2, r3 ; encoding: [0xff,0x33,0x12]
+and r1, r2
+# CHECK: and r1, r2 ; encoding: [0x53,0x12]
+and #15, r1
+# CHECK: and #15, r1 ; encoding: [0x64,0xf1]
+and #0xff, r1
+# CHECK: and #255, r1 ; encoding: [0x76,0x21,0xff,0x00]
+and #0xffff, r1
+# CHECK: and #65535, r1 ; encoding: [0x77,0x21,0xff,0xff,0x00]
+and #0xffffff00, r1
+# CHECK: and #4294967040, r1 ; encoding: [0x76,0x21,0x00,0xff]
+and #0x00ffffff, r1
+# CHECK: and #16777215, r1 ; encoding: [0x74,0x21,0xff,0xff,0xff,0x00]
+and r1, r2, r3
+# CHECK: and r1, r2, r3 ; encoding: [0xff,0x43,0x12]
+or r1, r2
+# CHECK: or r1, r2 ; encoding: [0x57,0x12]
+or #1, r1
+# CHECK: or #1, r1 ; encoding: [0x65,0x11]
+or #0x80, r1
+# CHECK: or #128, r1 ; encoding: [0x76,0x31,0x80,0x00]
+or #0x80000000, r1
+# CHECK: or #2147483648, r1 ; encoding: [0x74,0x31,0x00,0x00,0x00,0x80]
+or r1, r2, r3
+# CHECK: or r1, r2, r3 ; encoding: [0xff,0x53,0x12]
+
+# --- FC register ops
+sbb r1, r2
+# CHECK: sbb r1, r2 ; encoding: [0xfc,0x03,0x12]
+neg r1, r2
+# CHECK: neg r1, r2 ; encoding: [0xfc,0x07,0x12]
+adc r1, r2
+# CHECK: adc r1, r2 ; encoding: [0xfc,0x0b,0x12]
+abs r1, r2
+# CHECK: abs r1, r2 ; encoding: [0xfc,0x0f,0x12]
+max r1, r2
+# CHECK: max r1, r2 ; encoding: [0xfc,0x13,0x12]
+min r1, r2
+# CHECK: min r1, r2 ; encoding: [0xfc,0x17,0x12]
+emul r1, r2
+# CHECK: emul r1, r2 ; encoding: [0xfc,0x1b,0x12]
+emulu r1, r2
+# CHECK: emulu r1, r2 ; encoding: [0xfc,0x1f,0x12]
+div r1, r2
+# CHECK: div r1, r2 ; encoding: [0xfc,0x23,0x12]
+divu r1, r2
+# CHECK: divu r1, r2 ; encoding: [0xfc,0x27,0x12]
+tst r1, r2
+# CHECK: tst r1, r2 ; encoding: [0xfc,0x33,0x12]
+xor r1, r2
+# CHECK: xor r1, r2 ; encoding: [0xfc,0x37,0x12]
+not r1, r2
+# CHECK: not r1, r2 ; encoding: [0xfc,0x3b,0x12]
+
+# --- FD 70 immediate ops
+adc #1, r1
+# CHECK: adc #1, r1 ; encoding: [0xfd,0x74,0x21,0x01]
+max #-1, r1
+# CHECK: max #-1, r1 ; encoding: [0xfd,0x74,0x41,0xff]
+min #127, r1
+# CHECK: min #127, r1 ; encoding: [0xfd,0x74,0x51,0x7f]
+emul #128, r1
+# CHECK: emul #128, r1 ; encoding: [0xfd,0x78,0x61,0x80,0x00]
+emulu #0x1234, r1
+# CHECK: emulu #4660, r1 ; encoding: [0xfd,0x78,0x71,0x34,0x12]
+div #0x123456, r1
+# CHECK: div #1193046, r1 ; encoding: [0xfd,0x7c,0x81,0x56,0x34,0x12]
+divu #0x12345678, r1
+# CHECK: divu #305419896, r1 ; encoding: [0xfd,0x70,0x91,0x78,0x56,0x34,0x12]
+xor #0, r15
+# CHECK: xor #0, r15 ; encoding: [0xfd,0x74,0xdf,0x00]
+xor #0xffffffff, r1
+# CHECK: xor #4294967295, r1 ; encoding: [0xfd,0x74,0xd1,0xff]
+
+# --- unary
+not r1
+# CHECK: not r1 ; encoding: [0x7e,0x01]
+neg r2
+# CHECK: neg r2 ; encoding: [0x7e,0x12]
+abs r3
+# CHECK: abs r3 ; encoding: [0x7e,0x23]
+sat r4
+# CHECK: sat r4 ; encoding: [0x7e,0x34]
+rorc r5
+# CHECK: rorc r5 ; encoding: [0x7e,0x45]
+rolc r6
+# CHECK: rolc r6 ; encoding: [0x7e,0x56]
+
+# --- shifts / rotates
+shlr #0, r1
+# CHECK: shlr #0, r1 ; encoding: [0x68,0x01]
+shlr #15, r1
+# CHECK: shlr #15, r1 ; encoding: [0x68,0xf1]
+shlr #16, r1
+# CHECK: shlr #16, r1 ; encoding: [0x69,0x01]
+shlr #31, r15
+# CHECK: shlr #31, r15 ; encoding: [0x69,0xff]
+shar #1, r1
+# CHECK: shar #1, r1 ; encoding: [0x6a,0x11]
+shar #31, r1
+# CHECK: shar #31, r1 ; encoding: [0x6b,0xf1]
+shll #2, r1
+# CHECK: shll #2, r1 ; encoding: [0x6c,0x21]
+shll #17, r1
+# CHECK: shll #17, r1 ; encoding: [0x6d,0x11]
+shlr r1, r2
+# CHECK: shlr r1, r2 ; encoding: [0xfd,0x60,0x12]
+shar r1, r2
+# CHECK: shar r1, r2 ; encoding: [0xfd,0x61,0x12]
+shll r1, r2
+# CHECK: shll r1, r2 ; encoding: [0xfd,0x62,0x12]
+shlr #3, r1, r2
+# CHECK: shlr #3, r1, r2 ; encoding: [0xfd,0x83,0x12]
+shar #31, r1, r2
+# CHECK: shar #31, r1, r2 ; encoding: [0xfd,0xbf,0x12]
+shll #16, r15, r14
+# CHECK: shll #16, r15, r14 ; encoding: [0xfd,0xd0,0xfe]
+rotl #1, r1
+# CHECK: rotl #1, r1 ; encoding: [0xfd,0x6e,0x11]
+rotl #16, r1
+# CHECK: rotl #16, r1 ; encoding: [0xfd,0x6f,0x01]
+rotr #31, r1
+# CHECK: rotr #31, r1 ; encoding: [0xfd,0x6d,0xf1]
+rotl r1, r2
+# CHECK: rotl r1, r2 ; encoding: [0xfd,0x66,0x12]
+rotr r1, r2
+# CHECK: rotr r1, r2 ; encoding: [0xfd,0x64,0x12]
+revw r1, r2
+# CHECK: revw r1, r2 ; encoding: [0xfd,0x65,0x12]
+revl r1, r2
+# CHECK: revl r1, r2 ; encoding: [0xfd,0x67,0x12]
+
+# --- stack
+push.b r1
+# CHECK: push.b r1 ; encoding: [0x7e,0x81]
+push.w r2
+# CHECK: push.w r2 ; encoding: [0x7e,0x92]
+push.l r15
+# CHECK: push.l r15 ; encoding: [0x7e,0xaf]
+pop r1
+# CHECK: pop r1 ; encoding: [0x7e,0xb1]
+pop r15
+# CHECK: pop r15 ; encoding: [0x7e,0xbf]
+pushm r1-r2
+# CHECK: pushm r1-r2 ; encoding: [0x6e,0x12]
+pushm r6-r13
+# CHECK: pushm r6-r13 ; encoding: [0x6e,0x6d]
+pushm r1-r15
+# CHECK: pushm r1-r15 ; encoding: [0x6e,0x1f]
+popm r6-r13
+# CHECK: popm r6-r13 ; encoding: [0x6f,0x6d]
+popm r1-r15
+# CHECK: popm r1-r15 ; encoding: [0x6f,0x1f]
+rtsd #0
+# CHECK: rtsd #0 ; encoding: [0x67,0x00]
+rtsd #4
+# CHECK: rtsd #4 ; encoding: [0x67,0x01]
+rtsd #1020
+# CHECK: rtsd #1020 ; encoding: [0x67,0xff]
+rtsd #8, r6-r13
+# CHECK: rtsd #8, r6-r13 ; encoding: [0x3f,0x6d,0x02]
+rtsd #0, r1-r15
+# CHECK: rtsd #0, r1-r15 ; encoding: [0x3f,0x1f,0x00]
+
+# --- control
+brk
+# CHECK: brk ; encoding: [0x00]
+dbt
+# CHECK: dbt ; encoding: [0x01]
+rts
+# CHECK: rts ; encoding: [0x02]
+nop
+# CHECK: nop ; encoding: [0x03]
+satr
+# CHECK: satr ; encoding: [0x7f,0x93]
+rtfi
+# CHECK: rtfi ; encoding: [0x7f,0x94]
+rte
+# CHECK: rte ; encoding: [0x7f,0x95]
+wait
+# CHECK: wait ; encoding: [0x7f,0x96]
+jmp r1
+# CHECK: jmp r1 ; encoding: [0x7f,0x01]
+jsr r15
+# CHECK: jsr r15 ; encoding: [0x7f,0x1f]
+bra.l r2
+# CHECK: bra.l r2 ; encoding: [0x7f,0x42]
+bsr.l r3
+# CHECK: bsr.l r3 ; encoding: [0x7f,0x53]

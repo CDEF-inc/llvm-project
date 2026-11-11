@@ -1,0 +1,80 @@
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv1 --disassemble %s \
+# RUN:   | FileCheck %s
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble %s \
+# RUN:   | FileCheck %s
+
+# Branches with a constant displacement (bytes from the start of the
+# branch), the form the disassembler prints;
+# not compared with GNU as (GNU as reads a constant as an address).
+# The encodings of MC/RX/brdisp.s; the text reassembles to the same bytes.
+
+0x0b
+# CHECK: bra.s 3
+0x0f
+# CHECK: bra.s 7
+0x08
+# CHECK: bra.s 8
+0x0a
+# CHECK: bra.s 10
+0x13
+# CHECK: beq.s 3
+0x12
+# CHECK: beq.s 10
+0x1d
+# CHECK: bne.s 5
+0x19
+# CHECK: bne.s 9
+0x2e,0x80
+# CHECK: bra.b -128
+0x2e,0x00
+# CHECK: bra.b 0
+0x2e,0x7f
+# CHECK: bra.b 127
+0x20,0xfe
+# CHECK: beq.b -2
+0x21,0x64
+# CHECK: bne.b 100
+0x22,0xce
+# CHECK: bgeu.b -50
+0x23,0x32
+# CHECK: bltu.b 50
+0x24,0x01
+# CHECK: bgtu.b 1
+0x25,0xff
+# CHECK: bleu.b -1
+0x26,0x40
+# CHECK: bpz.b 64
+0x27,0xc0
+# CHECK: bn.b -64
+0x28,0x14
+# CHECK: bge.b 20
+0x29,0xec
+# CHECK: blt.b -20
+0x2a,0x1e
+# CHECK: bgt.b 30
+0x2b,0xe2
+# CHECK: ble.b -30
+0x2c,0x04
+# CHECK: bo.b 4
+0x2d,0xfc
+# CHECK: bno.b -4
+0x38,0x00,0x80
+# CHECK: bra.w -32768
+0x38,0xff,0x7f
+# CHECK: bra.w 32767
+0x3a,0xd4,0xfe
+# CHECK: beq.w -300
+0x3b,0x2c,0x01
+# CHECK: bne.w 300
+0x39,0xe8,0x03
+# CHECK: bsr.w 1000
+0x39,0x18,0xfc
+# CHECK: bsr.w -1000
+0x04,0x00,0x00,0x80
+# CHECK: bra.a -8388608
+0x04,0xff,0xff,0x7f
+# CHECK: bra.a 8388607
+0x05,0x00,0x00,0x01
+# CHECK: bsr.a 65536
+0x05,0x00,0x00,0xff
+# CHECK: bsr.a -65536
