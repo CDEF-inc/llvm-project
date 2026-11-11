@@ -37,6 +37,8 @@ public:
 
   Register getFrameRegister(const MachineFunction &MF) const override;
 
+  bool shouldRealignStack(const MachineFunction &MF) const override;
+
   bool isAsmClobberable(const MachineFunction &MF,
                         MCRegister PhysReg) const override;
 };
