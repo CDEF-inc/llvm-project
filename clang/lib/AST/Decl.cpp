@@ -5315,8 +5315,13 @@ bool RecordDecl::isMsStruct(const ASTContext &C) const {
   if (hasAttr<MSStructAttr>())
     return true;
   auto LayoutCompatibility = C.getLangOpts().getLayoutCompatibility();
-  if (LayoutCompatibility == LangOptions::LayoutCompatibilityKind::Default)
+  if (LayoutCompatibility == LangOptions::LayoutCompatibilityKind::Default) {
+    // On RX, GCC's packed attribute turns the default MS layout off.
+    if (C.getTargetInfo().getTriple().getArch() == llvm::Triple::rx &&
+        hasAttr<PackedAttr>())
+      return false;
     return C.defaultsToMsStruct();
+  }
   return LayoutCompatibility == LangOptions::LayoutCompatibilityKind::Microsoft;
 }
 

@@ -32,6 +32,7 @@
 #include "ToolChains/Lanai.h"
 #include "ToolChains/Linux.h"
 #include "ToolChains/MSP430.h"
+#include "ToolChains/RX.h"
 #include "ToolChains/MSVC.h"
 #include "ToolChains/Managarm.h"
 #include "ToolChains/MinGW.h"
@@ -7286,6 +7287,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         break;
       case llvm::Triple::msp430:
         TC = std::make_unique<toolchains::MSP430ToolChain>(*this, Target, Args);
+        break;
+      case llvm::Triple::rx:
+        TC = std::make_unique<toolchains::RXToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::riscv32:
       case llvm::Triple::riscv64:

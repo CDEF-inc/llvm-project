@@ -13,6 +13,7 @@
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
 #include "Arch/RISCV.h"
+#include "Arch/RX.h"
 #include "Arch/Sparc.h"
 #include "Arch/SystemZ.h"
 #include "clang/Config/config.h" // for GCC_INSTALL_PREFIX
@@ -647,6 +648,18 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
   switch (getToolChain().getArch()) {
   default:
     break;
+  case llvm::Triple::rx: {
+    // The e_flags (and the RXv2 / RXv3 / DFPU instructions) follow the
+    // options, as with rx-elf-gcc's asm spec.
+    CmdArgs.push_back(rx::hasRX64BitDoubles(Args) ? "-m64bit-doubles"
+                                                  : "-m32bit-doubles");
+    StringRef CPU = rx::getRXAsmCPU(Args);
+    if (!CPU.empty())
+      CmdArgs.push_back(Args.MakeArgString("-mcpu=" + CPU));
+    if (Args.hasArg(options::OPT_mrelax))
+      CmdArgs.push_back("-relax");
+    break;
+  }
   // Add --32/--64 to make sure we get the format we want.
   // This is incomplete
   case llvm::Triple::x86:
@@ -1551,6 +1564,35 @@ static bool findMSP430Multilibs(const Driver &D,
   return false;
 }
 
+// rx-elf-gcc's multilibs (-print-multi-lib): 64-bit-double for
+// -m64bit-doubles and no-fpu-libs for -mnofpu (or a CPU without an FPU). The
+// big-endian-data, pid and no-strings ones are for options clang does not
+// have.
+static void findRXMultilibs(const Driver &D, const llvm::Triple &TargetTriple,
+                            StringRef Path, const ArgList &Args,
+                            DetectedMultilibs &Result) {
+  FilterNonExistent NonExistent(Path, "/crtbegin.o", D.getVFS());
+  for (bool Double64 : {false, true})
+    for (bool NoFPU : {false, true}) {
+      std::string Suffix;
+      if (Double64)
+        Suffix += "/64-bit-double";
+      if (NoFPU)
+        Suffix += "/no-fpu-libs";
+      Result.Multilibs.push_back(MultilibBuilder(Suffix)
+                                     .flag("-m64bit-doubles", !Double64)
+                                     .flag("-mnofpu", !NoFPU)
+                                     .makeMultilib());
+    }
+  Result.Multilibs.FilterOut(NonExistent);
+
+  Multilib::flags_list Flags;
+  addMultilibFlag(tools::rx::hasRX64BitDoubles(Args), "-m64bit-doubles",
+                  Flags);
+  addMultilibFlag(!tools::rx::hasRXFPU(Args), "-mnofpu", Flags);
+  Result.Multilibs.select(D, Flags, Result.SelectedMultilibs);
+}
+
 static void findCSKYMultilibs(const Driver &D, const llvm::Triple &TargetTriple,
                               StringRef Path, const ArgList &Args,
                               DetectedMultilibs &Result) {
@@ -2434,6 +2476,9 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
   static const char *const MSP430LibDirs[] = {"/lib"};
   static const char *const MSP430Triples[] = {"msp430-elf"};
 
+  static const char *const RXLibDirs[] = {"/lib"};
+  static const char *const RXTriples[] = {"rx-elf", "rx-none-elf"};
+
   static const char *const PPCLibDirs[] = {"/lib32", "/lib"};
   static const char *const PPCTriples[] = {
       "powerpc-unknown-linux-gnu",
@@ -2728,6 +2773,10 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
     LibDirs.append(begin(MSP430LibDirs), end(MSP430LibDirs));
     TripleAliases.append(begin(MSP430Triples), end(MSP430Triples));
     break;
+  case llvm::Triple::rx:
+    LibDirs.append(begin(RXLibDirs), end(RXLibDirs));
+    TripleAliases.append(begin(RXTriples), end(RXTriples));
+    break;
   case llvm::Triple::ppc:
     LibDirs.append(begin(PPCLibDirs), end(PPCLibDirs));
     TripleAliases.append(begin(PPCTriples), end(PPCTriples));
@@ -2825,6 +2874,8 @@ bool Generic_GCC::GCCInstallationDetector::ScanGCCForMultilibs(
     findRISCVMultilibs(D, TargetTriple, Path, Args, Detected);
   } else if (isMSP430(TargetArch)) {
     findMSP430Multilibs(D, TargetTriple, Path, Args, Detected);
+  } else if (TargetArch == llvm::Triple::rx) {
+    findRXMultilibs(D, TargetTriple, Path, Args, Detected);
   } else if (TargetArch == llvm::Triple::avr) {
     // AVR has no multilibs.
   } else if (!findBiarchMultilibs(D, TargetTriple, Path, Args,

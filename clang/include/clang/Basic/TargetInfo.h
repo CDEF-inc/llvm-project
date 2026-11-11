@@ -471,6 +471,13 @@ public:
   virtual IntType getLeastIntTypeByWidth(unsigned BitWidth,
                                          bool IsSigned) const;
 
+  /// Return the type of int_fastN_t (__INT_FASTN_TYPE__): by default the
+  /// smallest integer type with at least the specified width.
+  virtual IntType getFastIntTypeByWidth(unsigned BitWidth,
+                                        bool IsSigned) const {
+    return getLeastIntTypeByWidth(BitWidth, IsSigned);
+  }
+
   /// Return floating point type with specified width. On PPC, there are
   /// three possible types for 128-bit floating point: "PPC double-double",
   /// IEEE 754R quad precision, and "long double" (which under the covers
@@ -1843,6 +1850,11 @@ public:
 
   /// Whether target allows to overalign ABI-specified preferred alignment
   virtual bool allowsLargerPreferedTypeAlignment() const { return true; }
+
+  /// Whether an ms_struct record aligns a field of fundamental type (or the
+  /// storage unit of a bit-field) to the type's size, as on i386, rather than
+  /// to the type's alignment.
+  virtual bool msStructAlignsFieldsToTypeSize() const { return true; }
 
   /// Whether target defaults to the `power` alignment rules of AIX.
   virtual bool defaultsToAIXPowerAlignment() const { return false; }

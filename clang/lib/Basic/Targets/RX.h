@@ -6,9 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file declares the Renesas RX TargetInfo: the types of GCC for rx-elf
-// with -m64bit-doubles (the ABI of the RX backend and rustc's rx-none-elf).
-// It is there for LLDB's type system; clang does not generate RX code.
+// This file declares the Renesas RX TargetInfo: the types and predefined
+// macros of GCC for rx-elf, by default with -m64bit-doubles (the ABI of the
+// RX backend and of rustc's rx-none-elf). GCC's -m32bit-doubles is the
+// 64bit-doubles feature turned off.
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,6 +27,10 @@ namespace targets {
 class LLVM_LIBRARY_VISIBILITY RXTargetInfo : public TargetInfo {
   static const char *const GCCRegNames[];
 
+  std::string CPU;
+  bool HasFPU = false;
+  bool HasDFPU = false;
+
 public:
   RXTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
       : TargetInfo(Triple) {
@@ -42,6 +47,7 @@ public:
     IntPtrType = SignedLong;
     WCharType = SignedLong;
     WIntType = UnsignedInt;
+    Char32Type = UnsignedLong;
     // C symbols carry a leading underscore (GCC's USER_LABEL_PREFIX), as the
     // data layout's `m:o` mangling says.
     UserLabelPrefix = "_";
@@ -56,7 +62,38 @@ public:
     return {};
   }
 
-  bool hasFeature(StringRef Feature) const override { return Feature == "rx"; }
+  // As GCC's rx-elf (newlib's types): int32_t and int_least32_t are long,
+  // int_fast8_t to int_fast32_t are int.
+  IntType getIntTypeByWidth(unsigned BitWidth, bool IsSigned) const override {
+    if (BitWidth == 32)
+      return IsSigned ? SignedLong : UnsignedLong;
+    return TargetInfo::getIntTypeByWidth(BitWidth, IsSigned);
+  }
+  IntType getLeastIntTypeByWidth(unsigned BitWidth,
+                                 bool IsSigned) const override {
+    if (BitWidth == 32)
+      return IsSigned ? SignedLong : UnsignedLong;
+    return TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
+  }
+  IntType getFastIntTypeByWidth(unsigned BitWidth,
+                                bool IsSigned) const override {
+    if (BitWidth <= 32)
+      return IsSigned ? SignedInt : UnsignedInt;
+    return TargetInfo::getFastIntTypeByWidth(BitWidth, IsSigned);
+  }
+
+  bool isValidCPUName(StringRef Name) const override;
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+  bool setCPU(StringRef Name) override;
+
+  bool initFeatureMap(llvm::StringMap<bool> &Features,
+                      DiagnosticsEngine &Diags, StringRef CPU,
+                      const std::vector<std::string> &FeaturesVec)
+      const override;
+  bool handleTargetFeatures(std::vector<std::string> &Features,
+                            DiagnosticsEngine &Diags) override;
+  bool isValidFeatureName(StringRef Name) const override;
+  bool hasFeature(StringRef Feature) const override;
 
   ArrayRef<const char *> getGCCRegNames() const override;
 
@@ -76,6 +113,11 @@ public:
   }
 
   std::string_view getClobbers() const override { return ""; }
+
+  // GCC aligns long long and double to 4 bytes everywhere, and its MS
+  // bit-field layout (the RX default) keeps the types' alignment.
+  bool allowsLargerPreferedTypeAlignment() const override { return false; }
+  bool msStructAlignsFieldsToTypeSize() const override { return false; }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::VoidPtrBuiltinVaList;
