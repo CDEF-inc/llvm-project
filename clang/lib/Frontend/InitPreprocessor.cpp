@@ -254,6 +254,11 @@ static void DefineExactWidthIntType(const LangOptions &LangOpts,
   if (TypeWidth == 16)
     Ty = IsSigned ? TI.getInt16Type() : TI.getUInt16Type();
 
+  // Some targets (such as RX) define [u]int32_t as [unsigned] long although
+  // int is 32 bits too.
+  if (TypeWidth == 32)
+    Ty = TI.getIntTypeByWidth(32, IsSigned);
+
   const char *Prefix = IsSigned ? "__INT" : "__UINT";
 
   DefineType(Prefix + Twine(TypeWidth) + "_TYPE__", Ty, Builder);
@@ -275,6 +280,9 @@ static void DefineExactWidthIntTypeSize(TargetInfo::IntType Ty,
   // ends up being defined in terms of the correct type.
   if (TypeWidth == 64)
     Ty = IsSigned ? TI.getInt64Type() : TI.getUInt64Type();
+
+  if (TypeWidth == 32)
+    Ty = TI.getIntTypeByWidth(32, IsSigned);
 
   // We don't need to define a _WIDTH macro for the exact-width types because
   // we already know the width.
@@ -305,8 +313,8 @@ static void DefineFastIntType(const LangOptions &LangOpts, unsigned TypeWidth,
                               bool IsSigned, const TargetInfo &TI,
                               MacroBuilder &Builder) {
   // stdint.h currently defines the fast int types as equivalent to the least
-  // types.
-  TargetInfo::IntType Ty = TI.getLeastIntTypeByWidth(TypeWidth, IsSigned);
+  // types (unless the target's C library uses these macros).
+  TargetInfo::IntType Ty = TI.getFastIntTypeByWidth(TypeWidth, IsSigned);
   if (Ty == TargetInfo::NoInt)
     return;
 

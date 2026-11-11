@@ -15,6 +15,7 @@
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
 #include "Arch/RISCV.h"
+#include "Arch/RX.h"
 #include "Arch/Sparc.h"
 #include "Arch/SystemZ.h"
 #include "Arch/VE.h"
@@ -121,6 +122,7 @@ static bool useFramePointerForTargetByDefault(const llvm::opt::ArgList &Args,
   case llvm::Triple::mips64el:
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
+  case llvm::Triple::rx:
     return !clang::driver::tools::areOptimizationsEnabled(Args);
   default:
     break;
@@ -761,6 +763,9 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
   case llvm::Triple::m68k:
     return m68k::getM68kTargetCPU(Args);
 
+  case llvm::Triple::rx:
+    return rx::getRXTargetCPU(Args);
+
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
   case llvm::Triple::mips64:
@@ -919,6 +924,9 @@ void tools::getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     break;
   case llvm::Triple::msp430:
     msp430::getMSP430TargetFeatures(D, Args, Features);
+    break;
+  case llvm::Triple::rx:
+    rx::getRXTargetFeatures(D, Args, Features);
     break;
   case llvm::Triple::ve:
     ve::getVETargetFeatures(D, Args, Features);

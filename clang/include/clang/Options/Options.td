@@ -242,6 +242,8 @@ def m_x86_AVX10_Features_Group : OptionGroup<"<x86 AVX10 features group>">,
                                  DocName<"X86 AVX10">;
 def m_riscv_Features_Group : OptionGroup<"<riscv features group>">,
                              Group<m_Group>, DocName<"RISC-V">;
+def m_rx_Features_Group : OptionGroup<"<rx features group>">,
+                          Group<m_Group>, DocName<"RX">;
 def m_ve_Features_Group : OptionGroup<"<ve features group>">,
                           Group<m_Group>, DocName<"VE">;
 def m_loongarch_Features_Group : OptionGroup<"<loongarch features group>">,
@@ -5649,6 +5651,24 @@ def mno_relax : Flag<["-"], "mno-relax">, Group<m_Group>,
 def msmall_data_limit_EQ : Joined<["-"], "msmall-data-limit=">, Group<m_Group>,
   Alias<G>,
   HelpText<"Put global and static data smaller than the limit into a special section">;
+let Flags = [TargetSpecific] in {
+def m64bit_doubles : Flag<["-"], "m64bit-doubles">, Group<m_rx_Features_Group>,
+  HelpText<"Make double and long double 64 bits (RX only, the default)">;
+def m32bit_doubles : Flag<["-"], "m32bit-doubles">, Group<m_rx_Features_Group>,
+  HelpText<"Make double and long double 32 bits, like float (RX only)">;
+def rx_fpu : Flag<["-"], "fpu">, Group<m_rx_Features_Group>,
+  HelpText<"Use the RX single-precision FPU">;
+def mnofpu : Flag<["-"], "mnofpu">, Group<m_rx_Features_Group>,
+  HelpText<"Do not use the RX single-precision FPU">;
+def nofpu : Flag<["-"], "nofpu">, Alias<mnofpu>;
+def mdfpu : Flag<["-"], "mdfpu">, Group<m_rx_Features_Group>,
+  HelpText<"Use the RX double-precision FPU (RXv3)">;
+def mno_dfpu : Flag<["-"], "mno-dfpu">, Group<m_rx_Features_Group>,
+  HelpText<"Do not use the RX double-precision FPU">;
+def misa_EQ : Joined<["-"], "misa=">, Group<m_rx_Features_Group>,
+  HelpText<"RX instruction set when no -mcpu is given (GNURX)">,
+  Values<"v1,v2,v3,v3e">;
+} // let Flags = [TargetSpecific]
 let Flags = [TargetSpecific] in {
 def msave_restore : Flag<["-"], "msave-restore">, Group<m_riscv_Features_Group>,
   HelpText<"Enable using library calls for save and restore">;

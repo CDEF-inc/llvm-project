@@ -47,6 +47,7 @@ add_clang_library(clangDriver
   ToolChains/Arch/Mips.cpp
   ToolChains/Arch/PPC.cpp
   ToolChains/Arch/RISCV.cpp
+  ToolChains/Arch/RX.cpp
   ToolChains/Arch/Sparc.cpp
   ToolChains/Arch/SystemZ.cpp
   ToolChains/Arch/VE.cpp
@@ -80,6 +81,7 @@ add_clang_library(clangDriver
   ToolChains/MipsLinux.cpp
   ToolChains/MinGW.cpp
   ToolChains/MSP430.cpp
+  ToolChains/RX.cpp
   ToolChains/MSVC.cpp
   ToolChains/NetBSD.cpp
   ToolChains/OHOS.cpp

@@ -91,6 +91,19 @@ def : Proc<"rxv1", []>;
 def : Proc<"rxv2", [FeatureRXv2, FeatureFPU]>;
 def : Proc<"rxv3", [FeatureRXv3, FeatureFPU, FeatureDFPU]>;
 def : Proc<"rxv3e", [FeatureRXv3e, FeatureFPU, FeatureDFPU]>;
+// GCC's and GNURX's -mcpu names (rx100 and rx200 have no FPU; none uses the
+// DFPU unless asked to).
+def : Proc<"rx100", []>;
+def : Proc<"rx13t", [FeatureFPU]>;
+def : Proc<"rx140", [FeatureRXv2, FeatureFPU]>;
+def : Proc<"rx200", []>;
+def : Proc<"rx230", [FeatureRXv2, FeatureFPU]>;
+def : Proc<"rx600", [FeatureFPU]>;
+def : Proc<"rx610", [FeatureFPU]>;
+def : Proc<"rx64m", [FeatureRXv2, FeatureFPU]>;
+def : Proc<"rx66t", [FeatureRXv3, FeatureFPU]>;
+def : Proc<"rx71m", [FeatureRXv2, FeatureFPU]>;
+def : Proc<"rx72t", [FeatureRXv3, FeatureFPU]>;
 
 def RXAsmParser : AsmParser;
 

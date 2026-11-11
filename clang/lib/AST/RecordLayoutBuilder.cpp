@@ -1598,7 +1598,8 @@ void ItaniumRecordLayoutBuilder::LayoutBitField(const FieldDecl *D) {
   // First, some simple bookkeeping to perform for ms_struct structs.
   if (IsMsStruct) {
     // The field alignment for integer types is always the size.
-    FieldAlign = StorageUnitSize;
+    if (Context.getTargetInfo().msStructAlignsFieldsToTypeSize())
+      FieldAlign = StorageUnitSize;
 
     // If the previous field was not a bitfield, or was a bitfield
     // with a different storage unit size, or if this field doesn't fit into
@@ -1918,7 +1919,8 @@ void ItaniumRecordLayoutBuilder::LayoutField(const FieldDecl *D,
           std::max(Layout.getNonVirtualSize(), Layout.getDataSize());
     }
 
-    if (IsMsStruct) {
+    if (IsMsStruct &&
+        Context.getTargetInfo().msStructAlignsFieldsToTypeSize()) {
       // If MS bitfield layout is required, figure out what type is being
       // laid out and align the field to the width of that type.
 
@@ -3365,8 +3367,11 @@ void MicrosoftRecordLayoutBuilder::computeVtorDispSet(
 }
 
 bool ASTContext::defaultsToMsStruct() const {
+  // GCC lays out RX bit-fields as MS does (TARGET_MS_BITFIELD_LAYOUT_P in
+  // gcc/config/rx/rx.cc), except for packed records (RecordDecl::isMsStruct).
   return getTargetInfo().hasMicrosoftRecordLayout() ||
-         getTargetInfo().getTriple().isWindowsGNUEnvironment();
+         getTargetInfo().getTriple().isWindowsGNUEnvironment() ||
+         getTargetInfo().getTriple().getArch() == llvm::Triple::rx;
 }
 
 /// getASTRecordLayout - Get or compute information about the layout of the

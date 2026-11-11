@@ -786,7 +786,8 @@ template <typename ArgT> static bool isNamedArg(const ArgT &Arg) {
 // every argument, so once one argument spills, all later ones are on the
 // stack too. In a variadic function the unnamed arguments and the last
 // named one are on the stack. Stack arguments are naturally aligned (4 bytes
-// for every scalar, including i64 and double) and packed without padding.
+// for int, float, pointers, i64 and double; see below for char and short)
+// and packed without padding.
 // An sret pointer is passed in R15 and does not count.
 //
 // Structures: the frontend passes one that GCC would put in registers (size
@@ -796,6 +797,10 @@ template <typename ArgT> static bool isNamedArg(const ArgT &Arg) {
 // struct may be followed by another at offset 3) and advances the register
 // count by its size rounded up to 4, so later arguments may still go in
 // registers.
+//
+// GCC does not promote char and short arguments: on the stack such an
+// argument takes its own size at its own alignment (two chars and a short
+// share one word), and the callee extends it.
 template <typename ArgT>
 static void analyzeRXArguments(CCState &State,
                                const SmallVectorImpl<ArgT> &Args) {
@@ -848,6 +853,13 @@ static void analyzeRXArguments(CCState &State,
                                          Args[K].VT, CCValAssign::Full));
         State.AllocateReg(ArgRegs[Reg - 1]);
       }
+    } else if (J == I + 1 && Args[I].ArgVT.isScalarInteger() &&
+               Args[I].ArgVT.getStoreSize() < 4) {
+      MVT MemVT = Args[I].ArgVT.getStoreSize() == 1 ? MVT::i8 : MVT::i16;
+      unsigned MemSize = MemVT.getStoreSize();
+      unsigned Offset = State.AllocateStack(MemSize, Align(MemSize));
+      State.addLoc(CCValAssign::getMem(I, Args[I].VT, Offset, MemVT,
+                                       CCValAssign::Full));
     } else {
       unsigned Offset = State.AllocateStack(Size, Align(4));
       for (unsigned K = I; K != J; ++K) {
@@ -898,8 +910,17 @@ SDValue RXTargetLowering::LowerFormalArguments(
       int FI = MFI.CreateFixedObject(Size, VA.getLocMemOffset(),
                                      /*IsImmutable=*/true);
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
-      ArgValue = DAG.getLoad(VA.getLocVT(), DL, Chain, FIN,
-                             MachinePointerInfo::getFixedStack(MF, FI));
+      MachinePointerInfo MPI = MachinePointerInfo::getFixedStack(MF, FI);
+      if (VA.getLocVT() != VA.getValVT()) {
+        // A char or short in its own size (analyzeRXArguments).
+        ISD::LoadExtType Ext = Flags.isSExt()   ? ISD::SEXTLOAD
+                               : Flags.isZExt() ? ISD::ZEXTLOAD
+                                                : ISD::EXTLOAD;
+        ArgValue = DAG.getExtLoad(Ext, DL, VA.getValVT(), Chain, FIN, MPI,
+                                  VA.getLocVT());
+      } else {
+        ArgValue = DAG.getLoad(VA.getLocVT(), DL, Chain, FIN, MPI);
+      }
     }
 
     if (VA.getLocInfo() == CCValAssign::SExt)
@@ -999,8 +1020,14 @@ SDValue RXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
           MachinePointerInfo(), MachinePointerInfo()));
       continue;
     }
-    MemOpChains.push_back(
-        DAG.getStore(Chain, DL, Arg, PtrOff, MachinePointerInfo()));
+    if (VA.getLocVT() != VA.getValVT())
+      // A char or short in its own size (analyzeRXArguments).
+      MemOpChains.push_back(DAG.getTruncStore(Chain, DL, Arg, PtrOff,
+                                              MachinePointerInfo(),
+                                              VA.getLocVT()));
+    else
+      MemOpChains.push_back(
+          DAG.getStore(Chain, DL, Arg, PtrOff, MachinePointerInfo()));
   }
   if (!MemOpChains.empty())
     Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
