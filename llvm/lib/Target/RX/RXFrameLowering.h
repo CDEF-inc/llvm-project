@@ -14,7 +14,8 @@
 //   locals and spill slots
 //   outgoing arguments              <- SP after the prologue
 //
-// No frame pointer is used. The callee-saved registers are saved as one
+// The frame pointer R6 and the stack realignment are described at
+// RXFrameLowering::hasFPImpl. The callee-saved registers are saved as one
 // range (any unused ones in between too), so that pushm saves them and rtsd
 // frees the frame, restores them and returns in one instruction.
 //
@@ -59,6 +60,14 @@ public:
                               const TargetRegisterInfo *TRI) const override;
 
   bool hasReservedCallFrame(const MachineFunction &MF) const override;
+
+  StackOffset getFrameIndexReference(const MachineFunction &MF, int FI,
+                                     Register &FrameReg) const override;
+
+  // Whether the prologue realigns SP (see hasFPImpl).
+  bool needsRealign(const MachineFunction &MF) const;
+  // Whether R7 is the base pointer: realignment and dynamic allocas.
+  bool hasBP(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm

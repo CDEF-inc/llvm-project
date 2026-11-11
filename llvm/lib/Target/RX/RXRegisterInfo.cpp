@@ -43,8 +43,12 @@ const uint32_t *RXRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
 BitVector RXRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   Reserved.set(RX::R0); // SP
-  if (getFrameLowering(MF)->hasFP(MF))
+  const RXFrameLowering *TFI =
+      MF.getSubtarget<RXSubtarget>().getFrameLowering();
+  if (TFI->hasFP(MF))
     Reserved.set(RX::R6);
+  if (TFI->hasBP(MF)) // the base pointer
+    Reserved.set(RX::R7);
   for (MCPhysReg Reg : RX::CTRLRegClass)
     Reserved.set(Reg);
   for (MCPhysReg Reg : RX::DCRRegClass) // DPSW, ...
@@ -101,18 +105,18 @@ bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
 
   MachineInstr &MI = *II;
   MachineFunction &MF = *MI.getParent()->getParent();
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
 
-  // Offsets are relative to the CFA (SP before the call pushed the return
-  // address); SP after the prologue, and the frame pointer if there is one,
-  // sit StackSize bytes below the return address.
-  int64_t Offset = MFI.getObjectOffset(FrameIndex) + 4 + MFI.getStackSize() +
+  // RXFrameLowering::getFrameIndexReference picks SP, R6 or R7.
+  Register Base;
+  int64_t Offset = MF.getSubtarget<RXSubtarget>()
+                       .getFrameLowering()
+                       ->getFrameIndexReference(MF, FrameIndex, Base)
+                       .getFixed() +
                    MI.getOperand(FIOperandNum + 1).getImm();
-  Register Base = getFrameRegister(MF);
 
   if (MI.getOpcode() == RX::FRMIDX) {
-    // add #Offset, r0 (or r6), rd
+    // add #Offset, r0 (or r6 / r7), rd
     const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
     MI.setDesc(TII.get(RX::ADD_rri32));
     MI.getOperand(FIOperandNum).ChangeToRegister(Base, false);
@@ -128,13 +132,38 @@ bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   return false;
 }
 
+// The prologue realigns SP for a fixed-size stack object aligned beyond the
+// stack alignment (see RXFrameLowering::hasFPImpl), or when the function
+// asks for it. A dynamic alloca aligns its own address (and #-align after
+// moving SP), so it needs no realignment, unlike in the generic check of
+// MaxAlign.
+bool RXRegisterInfo::shouldRealignStack(const MachineFunction &MF) const {
+  const Function &F = MF.getFunction();
+  if (F.hasFnAttribute(Attribute::StackAlignment) ||
+      F.hasFnAttribute("stackrealign"))
+    return TargetRegisterInfo::shouldRealignStack(MF);
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  Align StackAlign = MF.getSubtarget().getFrameLowering()->getStackAlign();
+  if (MFI.getMaxAlign() <= StackAlign)
+    return false;
+  for (int I = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); I != E;
+       ++I)
+    if (!MFI.isDeadObjectIndex(I) && !MFI.isVariableSizedObjectIndex(I) &&
+        MFI.getObjectAlign(I) > StackAlign)
+      return true;
+  return false;
+}
+
 Register RXRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   return getFrameLowering(MF)->hasFP(MF) ? RX::R6 : RX::R0;
 }
 
-// Inline assembly that clobbers SP, or R6 in a function with a frame
-// pointer, gets the "clobber list contains reserved registers" warning.
+// Inline assembly that clobbers SP, R6 in a function with a frame pointer,
+// or R7 in one with a base pointer, gets the "clobber list contains reserved
+// registers" warning.
 bool RXRegisterInfo::isAsmClobberable(const MachineFunction &MF,
                                       MCRegister PhysReg) const {
-  return PhysReg != RX::R0 && PhysReg != getFrameRegister(MF).asMCReg();
+  return PhysReg != RX::R0 && PhysReg != getFrameRegister(MF).asMCReg() &&
+         !(PhysReg == RX::R7 &&
+           MF.getSubtarget<RXSubtarget>().getFrameLowering()->hasBP(MF));
 }

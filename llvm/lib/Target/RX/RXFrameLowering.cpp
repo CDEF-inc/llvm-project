@@ -34,10 +34,51 @@ RXFrameLowering::RXFrameLowering(const RXSubtarget &STI)
 // when SP moves during the function (dynamic alloca). It is set to SP at
 // the end of the prologue, the bottom of the fixed frame, so frame objects
 // have the same offsets from it as from SP.
+//
+// A function with stack objects aligned beyond the stack alignment (4)
+// realigns SP instead: R6 is SP after the callee-saved push, the prologue
+// allocates the frame and rounds SP down (and #-MaxAlign, r0), and the
+// epilogue puts SP back from R6. The incoming arguments are addressed off
+// R6 and the locals off the aligned SP, both with the positive
+// displacements RX has; with dynamic allocas too, SP moves, so R7 (the base
+// pointer) keeps the aligned bottom of the frame for the locals.
 bool RXFrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   return MF.getTarget().Options.DisableFramePointerElim(MF) ||
-         MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken();
+         MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken() ||
+         needsRealign(MF);
+}
+
+bool RXFrameLowering::needsRealign(const MachineFunction &MF) const {
+  return MF.getSubtarget().getRegisterInfo()->hasStackRealignment(MF);
+}
+
+bool RXFrameLowering::hasBP(const MachineFunction &MF) const {
+  return needsRealign(MF) && MF.getFrameInfo().hasVarSizedObjects();
+}
+
+// Offsets are relative to the CFA (SP before the call pushed the return
+// address). SP after the prologue, and the frame pointer if there is one,
+// sit StackSize bytes below the return address; with realignment the
+// locals are off the aligned SP (or the base pointer) at the same offsets,
+// as PEI aligned StackSize + 4 to MaxAlign, and the fixed objects (the
+// incoming arguments) off R6, RegBytes below the return address.
+StackOffset
+RXFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
+                                        Register &FrameReg) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  int64_t Offset = MFI.getObjectOffset(FI) + 4;
+  if (needsRealign(MF)) {
+    if (MFI.isFixedObjectIndex(FI)) {
+      FrameReg = RX::R6;
+      auto *RXFI = MF.getInfo<RXMachineFunctionInfo>();
+      return StackOffset::getFixed(Offset + RXFI->getCalleeSavedFrameSize());
+    }
+    FrameReg = hasBP(MF) ? RX::R7 : RX::R0;
+    return StackOffset::getFixed(Offset + MFI.getStackSize());
+  }
+  FrameReg = hasFP(MF) ? RX::R6 : RX::R0;
+  return StackOffset::getFixed(Offset + MFI.getStackSize());
 }
 
 bool RXFrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
@@ -83,6 +124,34 @@ void RXFrameLowering::emitPrologue(MachineFunction &MF,
   }
 
   uint64_t NumBytes = MFI.getStackSize() - RegBytes;
+  if (hasFP(MF) && !MF.getRegInfo().isReserved(RX::R6))
+    report_fatal_error("RX: the frame pointer became needed after register "
+                       "allocation");
+  if (needsRealign(MF)) {
+    // mov.l r0, r6 / add #-N, r0 / and #-MaxAlign, r0 [/ mov.l r0, r7]
+    if (hasBP(MF) && !MF.getRegInfo().isReserved(RX::R7))
+      report_fatal_error("RX: the base pointer became needed after register "
+                         "allocation");
+    BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R6)
+        .addReg(RX::R0)
+        .setMIFlag(MachineInstr::FrameSetup);
+    if (NeedsCFI)
+      CFIBuilder.buildDefCFA(RX::R6, 4 + RegBytes);
+    if (NumBytes)
+      adjustSP(MBB, MBBI, DL, TII, -static_cast<int64_t>(NumBytes),
+               MachineInstr::FrameSetup);
+    MachineInstr *MI =
+        BuildMI(MBB, MBBI, DL, TII.get(RX::AND_ri32), RX::R0)
+            .addReg(RX::R0)
+            .addImm(-static_cast<int64_t>(MFI.getMaxAlign().value()))
+            .setMIFlag(MachineInstr::FrameSetup);
+    MI->findRegisterDefOperand(RX::PSW, /*TRI=*/nullptr)->setIsDead();
+    if (hasBP(MF))
+      BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R7)
+          .addReg(RX::R0)
+          .setMIFlag(MachineInstr::FrameSetup);
+    return;
+  }
   if (hasFP(MF)) {
     // add #-N, r0, r6 / mov.l r6, r0 (as GCC), or mov.l r0, r6 for an
     // empty frame. From the first instruction on, the CFA is R6 + offset,
@@ -147,11 +216,16 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
   bool NeedsCFI = MF.needsFrameMoves();
   bool FP = hasFP(MF);
 
-  // SP back to the bottom of the fixed frame, where R6 points.
-  if (FP && MFI.hasVarSizedObjects())
+  // SP back to the bottom of the fixed frame, where R6 points; with
+  // realignment, R6 points right below the callee-saved registers, so the
+  // frame is freed with it.
+  bool Realign = needsRealign(MF);
+  if (FP && (MFI.hasVarSizedObjects() || Realign))
     BuildMI(MBB, MBBI, DL, TII.get(RX::MOV_L_rr), RX::R0)
         .addReg(RX::R6)
         .setMIFlag(MachineInstr::FrameDestroy);
+  if (Realign)
+    NumBytes = 0;
 
   // rtsd #imm, lo-hi frees imm bytes, the registers included, then pops
   // lo..hi and returns; rtsd #imm frees imm bytes and returns. imm is at
@@ -215,6 +289,8 @@ void RXFrameLowering::determineCalleeSaves(MachineFunction &MF,
   TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
   if (hasFP(MF))
     SavedRegs.set(RX::R6);
+  if (hasBP(MF))
+    SavedRegs.set(RX::R7);
 
   // Save one range of registers: the callee-saved registers are R6..R13
   // in order, so fill in the ones between the lowest and the highest used.

@@ -76,7 +76,10 @@ def GPR : RegisterClass<"RX", [i32, f32], 32,
 // R0-R7: the only registers the 2-byte "dsp5[Rs]" MOV/MOVU forms can encode.
 def GPRLow : RegisterClass<"RX", [i32], 32, (sequence "R%u", 0, 7)>;
 
-def DPR : RegisterClass<"RX", [f64], 64, (sequence "DR%u", 0, 15)>;
+// Spill slots are 4-aligned, as f64 (f64:32) and dmov.d need: an 8-aligned
+// slot would make the frame need realignment after register allocation,
+// when the frame pointer can no longer be reserved.
+def DPR : RegisterClass<"RX", [f64], 32, (sequence "DR%u", 0, 15)>;
 
 def CCR : RegisterClass<"RX", [i32], 32, (add PSW, FPSW)> {
   let isAllocatable = 0;
