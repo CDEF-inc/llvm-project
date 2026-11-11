@@ -117,9 +117,14 @@ RXTargetLowering::RXTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FP_TO_UINT, MVT::i32,
                        STI.hasRXv2() ? Custom : LibCall);
 
+    // frem is fmodf. With Expand, ExpandIRInsts would replace it in IR by a
+    // loop of frexpf / ldexpf / fmaf / rintf calls, and compiler_builtins has
+    // no frexpf for rx-none-elf.
+    setOperationAction(ISD::FREM, MVT::f32, LibCall);
+
     // Everything else is bit manipulation or a libcall.
     for (unsigned Op :
-         {ISD::FNEG, ISD::FABS, ISD::FCOPYSIGN, ISD::FREM, ISD::FMA,
+         {ISD::FNEG, ISD::FABS, ISD::FCOPYSIGN, ISD::FMA,
           ISD::FMAD, ISD::FMINNUM, ISD::FMAXNUM, ISD::FMINIMUM,
           ISD::FMAXIMUM, ISD::FMINIMUMNUM, ISD::FMAXIMUMNUM, ISD::FCEIL,
           ISD::FFLOOR, ISD::FTRUNC, ISD::FRINT, ISD::FNEARBYINT,
