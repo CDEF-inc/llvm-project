@@ -216,6 +216,17 @@ public:
   bool isDsp16D() const { return isDsp(65535, 4); }
 
   bool isBrTarget() const { return Kind == k_Imm && !HasHash; }
+  // A label, or a constant displacement in the form's range.
+  bool isBrTargetInRange(int64_t Lo, int64_t Hi) const {
+    int64_t V;
+    return isBrTarget() && (!getConstant(V) || (V >= Lo && V <= Hi));
+  }
+  bool isBrTarget3() const { return isBrTargetInRange(3, 10); }
+  bool isBrTarget8() const { return isBrTargetInRange(INT8_MIN, INT8_MAX); }
+  bool isBrTarget16() const { return isBrTargetInRange(INT16_MIN, INT16_MAX); }
+  bool isBrTarget24() const {
+    return isBrTargetInRange(-(1 << 23), (1 << 23) - 1);
+  }
 
   void addRegOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "invalid number of operands");
@@ -424,9 +435,19 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     Out.emitInstruction(Inst, getSTI());
     noteRXInstruction(Out, Inst.getOpcode());
     return false;
-  case Match_MissingFeature:
-    return Error(IDLoc, "instruction requires a CPU feature not currently "
-                        "enabled (e.g. -mcpu=rxv3)");
+  case Match_MissingFeature: {
+    // Name the first CPU that has the instruction (the DFPU comes with
+    // RXv3).
+    const char *CPU = "rxv2";
+    if (MissingFeatures[Feature_HasRXv3eBit])
+      CPU = "rxv3e";
+    else if (MissingFeatures[Feature_HasRXv3Bit] ||
+             MissingFeatures[Feature_HasDFPUBit])
+      CPU = "rxv3";
+    return Error(IDLoc, Twine("instruction requires a CPU feature not "
+                              "currently enabled (-mcpu=") +
+                            CPU + " or later)");
+  }
   case Match_MnemonicFail: {
     FeatureBitset FBS = ComputeAvailableFeatures(getSTI().getFeatureBits());
     std::string Suggestion = RXMnemonicSpellCheck(

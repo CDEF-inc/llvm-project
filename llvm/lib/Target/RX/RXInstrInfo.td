@@ -105,24 +105,28 @@ foreach N = ["5", "8", "16"] in {
   def dsp#N#l : RXDsp<"Dsp"#N#"L", 2>;
 }
 
-// Branch targets (a label, or a constant PC-relative displacement).
-def BrTargetClass : AsmOperandClass {
-  let Name = "BrTarget";
+// Branch targets (a label, or a constant PC-relative displacement). A
+// constant must fit the form: 3..10 for .s, a signed 8 / 16 / 24-bit value
+// for .b / .w / .a (a label out of range is an error when the fixup is
+// applied).
+class BrTargetClass<string size> : AsmOperandClass {
+  let Name = "BrTarget"#size;
   let RenderMethod = "addImmOperands";
 }
 
-class RXBrTarget<string encoder, string decoder> : Operand<OtherVT> {
-  let ParserMatchClass = BrTargetClass;
+class RXBrTarget<string size, string encoder, string decoder>
+    : Operand<OtherVT> {
+  let ParserMatchClass = BrTargetClass<size>;
   let EncoderMethod = encoder;
   let DecoderMethod = decoder;
   let PrintMethod = "printPCRel";
   let OperandType = "OPERAND_PCREL";
 }
 
-def brtarget3  : RXBrTarget<"getBrTarget3OpValue", "decodeBrTarget3">;
-def brtarget8  : RXBrTarget<"getBrTarget8OpValue", "decodeSImm<8>">;
-def brtarget16 : RXBrTarget<"getBrTarget16OpValue", "decodeSImm<16>">;
-def brtarget24 : RXBrTarget<"getBrTarget24OpValue", "decodeSImm<24>">;
+def brtarget3  : RXBrTarget<"3", "getBrTarget3OpValue", "decodeBrTarget3">;
+def brtarget8  : RXBrTarget<"8", "getBrTarget8OpValue", "decodeSImm<8>">;
+def brtarget16 : RXBrTarget<"16", "getBrTarget16OpValue", "decodeSImm<16>">;
+def brtarget24 : RXBrTarget<"24", "getBrTarget24OpValue", "decodeSImm<24>">;
 
 //===----------------------------------------------------------------------===//
 // Data transfer: MOV / MOVU
