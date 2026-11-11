@@ -15,3 +15,32 @@ add #1, r16
 # CHECK: :[[@LINE-1]]:9: error: invalid operand for instruction
 mov.b r1, [r2+r3]
 # CHECK: :[[@LINE-1]]:15: error: expected ']'
+
+# A constant branch displacement must fit the form: 3..10 for .s, signed
+# 8 / 16 / 24 bits for .b / .w / .a (labels: invalid-branch.s).
+bra.s 11
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bra.s 2
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bra.s -1
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+beq.s 11
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bne.s 0
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bz.s 11
+# CHECK: :[[@LINE-1]]:6: error: invalid operand for instruction
+bnz.s 2
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bra.b 128
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+beq.b -129
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bra.w 32768
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bsr.w -32769
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bra.a 8388608
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+bsr.a -8388609
+# CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
