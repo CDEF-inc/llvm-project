@@ -87,7 +87,9 @@
  *
  * We currently assume that the minimum-width types and the fastest
  * minimum-width types are the same. This is allowed by the standard, but is
- * suboptimal.
+ * suboptimal. On RX, as with GCC and newlib, int_fast8_t to int_fast32_t are
+ * int instead: there they come from the predefined __INT_FASTN_TYPE__
+ * macros (__stdint_fast_predefined).
  *
  * In violation of the standard, some targets do not implement a type that is
  * wide enough to represent all of the required widths (8-, 16-, 32-, 64-bit).
@@ -216,11 +218,21 @@ typedef __UINT32_TYPE__ uint32_t;
 # define __uint_least8_t uint32_t
 #endif /* __INT32_TYPE__ */
 
+#if defined(__RX__) && defined(__INT_FAST8_TYPE__) &&                         \
+    defined(__INT_FAST16_TYPE__) && defined(__INT_FAST32_TYPE__)
+#define __stdint_fast_predefined 1
+#endif
+
 #ifdef __int_least32_t
 typedef __int_least32_t int_least32_t;
 typedef __uint_least32_t uint_least32_t;
+#ifdef __stdint_fast_predefined
+typedef __INT_FAST32_TYPE__ int_fast32_t;
+typedef __UINT_FAST32_TYPE__ uint_fast32_t;
+#else
 typedef __int_least32_t int_fast32_t;
 typedef __uint_least32_t uint_fast32_t;
+#endif
 #endif /* __int_least32_t */
 
 #ifdef __INT24_TYPE__
@@ -258,8 +270,13 @@ typedef __UINT16_TYPE__ uint16_t;
 #ifdef __int_least16_t
 typedef __int_least16_t int_least16_t;
 typedef __uint_least16_t uint_least16_t;
+#ifdef __stdint_fast_predefined
+typedef __INT_FAST16_TYPE__ int_fast16_t;
+typedef __UINT_FAST16_TYPE__ uint_fast16_t;
+#else
 typedef __int_least16_t int_fast16_t;
 typedef __uint_least16_t uint_fast16_t;
+#endif
 #endif /* __int_least16_t */
 
 
@@ -277,8 +294,13 @@ typedef __UINT8_TYPE__ uint8_t;
 #ifdef __int_least8_t
 typedef __int_least8_t int_least8_t;
 typedef __uint_least8_t uint_least8_t;
+#ifdef __stdint_fast_predefined
+typedef __INT_FAST8_TYPE__ int_fast8_t;
+typedef __UINT_FAST8_TYPE__ uint_fast8_t;
+#else
 typedef __int_least8_t int_fast8_t;
 typedef __uint_least8_t uint_fast8_t;
+#endif
 #endif /* __int_least8_t */
 
 /* prevent glibc sys/types.h from defining conflicting types */
@@ -766,6 +788,41 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define __UINTN_MAX(n)  __stdint_join3(UINT, n, _MAX)
 #define  __INTN_C(n, v) __stdint_join3( INT, n, _C(v))
 #define __UINTN_C(n, v) __stdint_join3(UINT, n, _C(v))
+
+#ifdef __stdint_fast_predefined
+#undef INT_FAST32_MIN
+#undef INT_FAST32_MAX
+#undef UINT_FAST32_MAX
+#undef INT_FAST16_MIN
+#undef INT_FAST16_MAX
+#undef UINT_FAST16_MAX
+#undef INT_FAST8_MIN
+#undef INT_FAST8_MAX
+#undef UINT_FAST8_MAX
+#define INT_FAST32_MIN (-__INT_FAST32_MAX__ - 1)
+#define INT_FAST32_MAX __INT_FAST32_MAX__
+#define UINT_FAST32_MAX __UINT_FAST32_MAX__
+#define INT_FAST16_MIN (-__INT_FAST16_MAX__ - 1)
+#define INT_FAST16_MAX __INT_FAST16_MAX__
+#define UINT_FAST16_MAX __UINT_FAST16_MAX__
+#define INT_FAST8_MIN (-__INT_FAST8_MAX__ - 1)
+#define INT_FAST8_MAX __INT_FAST8_MAX__
+#define UINT_FAST8_MAX __UINT_FAST8_MAX__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#undef UINT_FAST32_WIDTH
+#undef INT_FAST32_WIDTH
+#undef UINT_FAST16_WIDTH
+#undef INT_FAST16_WIDTH
+#undef UINT_FAST8_WIDTH
+#undef INT_FAST8_WIDTH
+#define UINT_FAST32_WIDTH __INT_FAST32_WIDTH__
+#define INT_FAST32_WIDTH UINT_FAST32_WIDTH
+#define UINT_FAST16_WIDTH __INT_FAST16_WIDTH__
+#define INT_FAST16_WIDTH UINT_FAST16_WIDTH
+#define UINT_FAST8_WIDTH __INT_FAST8_WIDTH__
+#define INT_FAST8_WIDTH UINT_FAST8_WIDTH
+#endif /* __STDC_VERSION__ */
+#endif /* __stdint_fast_predefined */
 
 /* C99 7.18.2.4 Limits of integer types capable of holding object pointers. */
 /* C99 7.18.3 Limits of other integer types. */
