@@ -280,6 +280,10 @@ DecodeStatus RXDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
     DecodeStatus Result =
         decodeInstruction(DecoderTables[Len - 1], MI, Insn, Address, this, STI);
     if (Result != MCDisassembler::Fail) {
+      // Register operands the manual rules out (pushm r0-r3, emul to R15,
+      // ...) are not an instruction.
+      if (checkRXRegisterOperands(MI, *getContext().getRegisterInfo()))
+        break;
       Size = Len;
       return Result;
     }

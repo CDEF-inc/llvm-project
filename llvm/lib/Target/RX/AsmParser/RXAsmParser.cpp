@@ -405,6 +405,19 @@ bool RXAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MissingFeatures,
                                MatchingInlineAsm)) {
   case Match_Success:
+    // pushm / popm of one register is push.l / pop, as in GNU as (the
+    // encoding needs the first register below the last).
+    if ((Inst.getOpcode() == RX::PUSHM || Inst.getOpcode() == RX::POPM) &&
+        Inst.getOperand(0).getReg() == Inst.getOperand(1).getReg() &&
+        Inst.getOperand(0).getReg() != RX::R0) {
+      MCInst One;
+      One.setOpcode(Inst.getOpcode() == RX::PUSHM ? RX::PUSH_L : RX::POP);
+      One.addOperand(Inst.getOperand(0));
+      Inst = One;
+    }
+    if (const char *Msg =
+            checkRXRegisterOperands(Inst, *getContext().getRegisterInfo()))
+      return Error(IDLoc, Msg);
     switch (Inst.getOpcode()) {
     case RX::DPUSHM_D:
     case RX::DPUSHM_L:

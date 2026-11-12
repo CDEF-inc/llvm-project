@@ -1,0 +1,13 @@
+# The register operands of MC/RX/invalid-regs.s are not instructions. After
+# an invalid byte the disassembler resyncs on the next one, so each case runs
+# on its own.
+
+# RUN: echo "0x6f,0x03" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0x6f,0x32" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0x6e,0x03" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0x3f,0x03,0x00" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0x3f,0x32,0x00" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0xfc,0x1b,0x1f" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+# RUN: echo "0xfc,0xd3,0x10" | llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble 2>&1 | FileCheck %s
+
+# CHECK: warning: invalid instruction encoding
