@@ -28,6 +28,11 @@ class RXMachineFunctionInfo : public MachineFunctionInfo {
   /// function (where va_start points).
   int VarArgsFrameIndex = 0;
 
+  /// The function's own arguments, or those of a call it makes, would go in
+  /// other places under the other calling convention (CC-RX's or GNURX's);
+  /// see RXAsmPrinter's ABI note.
+  bool ABIDependent = false;
+
 public:
   RXMachineFunctionInfo() = default;
   RXMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {}
@@ -47,6 +52,9 @@ public:
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int FI) { VarArgsFrameIndex = FI; }
+
+  bool isABIDependent() const { return ABIDependent; }
+  void setABIDependent() { ABIDependent = true; }
 };
 
 } // end namespace llvm

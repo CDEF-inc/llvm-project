@@ -454,6 +454,9 @@ struct Config {
   bool zShstk;
   bool zStartStopGC;
   uint8_t zStartStopVisibility;
+  // RX: what a calling-convention mismatch is (-z rx-abi-check=): 2 an
+  // error, 1 a warning, 0 not checked.
+  uint8_t zRxAbiCheck;
   bool zText;
   bool zRetpolineplt;
   bool zWxneeded;

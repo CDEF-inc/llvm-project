@@ -884,6 +884,33 @@ static void analyzeRXArguments(CCState &State,
   }
 }
 
+// Records in the function's info whether the argument locations ArgLocs
+// (assigned by the subtarget's convention) differ from those of the other
+// convention, so that the object's ABI note (RXAsmPrinter) says whether it
+// depends on the convention. Only calls between objects matter: a function
+// with local linkage, or a call to one, is not counted.
+template <typename ArgT>
+static void noteABIDependence(MachineFunction &MF, CallingConv::ID CallConv,
+                              bool IsVarArg, const SmallVectorImpl<ArgT> &Args,
+                              const SmallVectorImpl<CCValAssign> &ArgLocs,
+                              bool GNUABI) {
+  auto *FI = MF.getInfo<RXMachineFunctionInfo>();
+  if (FI->isABIDependent())
+    return;
+  SmallVector<CCValAssign, 16> OtherLocs;
+  CCState Other(CallConv, IsVarArg, MF, OtherLocs, MF.getFunction().getContext());
+  analyzeRXArguments(Other, Args, !GNUABI);
+  bool Same = OtherLocs.size() == ArgLocs.size();
+  for (unsigned I = 0; Same && I != ArgLocs.size(); ++I) {
+    const CCValAssign &A = ArgLocs[I], &B = OtherLocs[I];
+    Same = A.getValNo() == B.getValNo() && A.isRegLoc() == B.isRegLoc() &&
+           (A.isRegLoc() ? A.getLocReg() == B.getLocReg()
+                         : A.getLocMemOffset() == B.getLocMemOffset());
+  }
+  if (!Same)
+    FI->setABIDependent();
+}
+
 SDValue RXTargetLowering::LowerFormalArguments(
     SDValue Chain, CallingConv::ID CallConv, bool IsVarArg,
     const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
@@ -898,6 +925,8 @@ SDValue RXTargetLowering::LowerFormalArguments(
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
   analyzeRXArguments(CCInfo, Ins, STI.isGNUABI());
+  if (!MF.getFunction().hasLocalLinkage())
+    noteABIDependence(MF, CallConv, IsVarArg, Ins, ArgLocs, STI.isGNUABI());
 
   for (const CCValAssign &VA : ArgLocs) {
     const ISD::ArgFlagsTy &Flags = Ins[VA.getValNo()].Flags;
@@ -1006,6 +1035,15 @@ SDValue RXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, CLI.IsVarArg, MF, ArgLocs, *DAG.getContext());
   analyzeRXArguments(CCInfo, CLI.Outs, STI.isGNUABI());
+  {
+    // A direct call to a function of this object cannot mismatch.
+    const GlobalValue *GV = nullptr;
+    if (auto *G = dyn_cast<GlobalAddressSDNode>(Callee))
+      GV = G->getGlobal();
+    if (!GV || !GV->hasLocalLinkage())
+      noteABIDependence(MF, CallConv, CLI.IsVarArg, CLI.Outs, ArgLocs,
+                        STI.isGNUABI());
+  }
   unsigned NumBytes = CCInfo.getStackSize();
 
   Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
