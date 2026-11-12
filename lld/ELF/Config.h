@@ -649,6 +649,7 @@ struct InStruct {
   std::unique_ptr<SymtabShndxSection> symTabShndx;
   std::unique_ptr<SyntheticSection> hexagonAttributes;
   std::unique_ptr<SyntheticSection> riscvAttributes;
+  std::unique_ptr<SyntheticSection> rxAbiNote;
 };
 
 struct Ctx : CommonLinkerContext {

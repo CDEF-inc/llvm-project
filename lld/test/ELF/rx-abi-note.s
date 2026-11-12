@@ -4,7 +4,9 @@
 ## 2 GNURX's, 3 neither. Linking 1 with 2 is an error, and so is 1 with an
 ## object of an older LLVM (no note, a clang or rustc .comment), which
 ## followed GNURX's. Objects without the note otherwise (GCC's, CC-RX's,
-## assembly) are not checked. -z rx-abi-check=warning|none relaxes it.
+## assembly) are not checked. -z rx-abi-check=warning|none relaxes it. The
+## output has one note for all the inputs, counting an older LLVM's objects
+## as GNURX's.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-mc -filetype=obj -triple=rx ccrx.s -o ccrx.o
@@ -29,12 +31,35 @@
 # RUN: ld.lld -e 0 -z rx-abi-check=none ccrx.o gnu.o old.o -o out 2>&1 | count 0
 # RUN: ld.lld -e 0 -z rx-abi-check=error ccrx.o neutral.o -o out 2>&1 | count 0
 
-## ld -r keeps the notes; the result is checked as a whole.
+## The output has one note: the inputs' combined.
+# RUN: ld.lld -e 0 ccrx.o neutral.o gcc.o -o out
+# RUN: llvm-readelf -n out | FileCheck %s --check-prefix=OUT1
+# OUT1:     Displaying notes found in: .note.rx.abi
+# OUT1:       RX 0x00000008 NT_VERSION (version)
+# OUT1-NEXT:   description data: 01 00 00 00 01 00 00 00
+# OUT1-NOT: RX 0x00000008
+# RUN: ld.lld -e 0 neutral.o gcc.o -o out
+# RUN: llvm-readelf -n out | FileCheck %s --check-prefix=OUT3
+# OUT3: description data: 03 00 00 00 01 00 00 00
+## No note in, none out (an older LLVM's object stays told by .comment).
+# RUN: ld.lld -r old.o gcc.o -o r0.o
+# RUN: llvm-readelf -S r0.o | FileCheck %s --check-prefix=NONOTE
+# NONOTE-NOT: .note.rx.abi
+# RUN: not ld.lld -e 0 r0.o ccrx.o -o out 2>&1 | FileCheck %s --check-prefix=OLDR0
+# OLDR0: error: r0.o was built by an older LLVM for RX
+
+## ld -r: the result is checked as a whole later.
 # RUN: ld.lld -r ccrx.o neutral.o -o r.o
-# RUN: llvm-readelf -n r.o | FileCheck %s --check-prefix=NOTES
-# NOTES-COUNT-2: RX 0x00000008 NT_VERSION (version)
+# RUN: llvm-readelf -n r.o | FileCheck %s --check-prefix=OUT1
 # RUN: not ld.lld -e 0 r.o gnu.o -o out 2>&1 | FileCheck %s --check-prefix=MIXR
 # MIXR: error: r.o uses CC-RX's calling convention (-mabi=ccrx) and gnu.o GNURX's
+## An older LLVM's object in an ld -r output with a noted one: the output
+## says GNURX's, so that it still cannot be linked with CC-RX's.
+# RUN: ld.lld -r old.o neutral.o -o r2.o
+# RUN: llvm-readelf -n r2.o | FileCheck %s --check-prefix=OUT2
+# OUT2: description data: 02 00 00 00 01 00 00 00
+# RUN: not ld.lld -e 0 r2.o ccrx.o -o out 2>&1 | FileCheck %s --check-prefix=OLDR
+# OLDR: error: ccrx.o uses CC-RX's calling convention (-mabi=ccrx) and r2.o GNURX's
 
 # RUN: not ld.lld -e 0 -z rx-abi-check=maybe ccrx.o -o out 2>&1 | FileCheck %s --check-prefix=BAD
 # BAD: error: unknown -z rx-abi-check= value: maybe

@@ -4,6 +4,7 @@
 ; RUN: llc -mtriple=rx-none-elf < %t/call.ll | FileCheck %s --check-prefix=CCRX
 ; RUN: llc -mtriple=rx-none-elf -target-abi=gnu < %t/call.ll | FileCheck %s --check-prefix=GNU
 ; RUN: llc -mtriple=rx-none-elf < %t/indirect.ll | FileCheck %s --check-prefix=CCRX
+; RUN: llc -mtriple=rx-none-elf < %t/escaping.ll | FileCheck %s --check-prefix=CCRX
 ; RUN: llc -mtriple=rx-none-elf < %t/neutral.ll | FileCheck %s --check-prefix=NEUTRAL
 ; RUN: llc -mtriple=rx-none-elf -target-abi=gnu < %t/neutral.ll | FileCheck %s --check-prefix=NEUTRAL
 ; RUN: llc -mtriple=rx-none-elf < %t/empty.ll | FileCheck %s --check-prefix=NEUTRAL
@@ -66,9 +67,22 @@ define i32 @f(ptr %p) {
   ret i32 %r
 }
 
+;--- escaping.ll
+; A function with local linkage whose address goes to another object, which
+; may call it: it counts.
+declare void @register(ptr)
+define internal i32 @callback(i32 %a, i32 %b, i32 %c, i64 %d, i32 %e) {
+  ret i32 %e
+}
+define void @f() {
+  call void @register(ptr @callback)
+  ret void
+}
+
 ;--- neutral.ll
 ; Only arguments that both conventions place alike, and a function that does
-; not, but has local linkage and is called only here.
+; not, but has local linkage and is called only here (its address is not
+; taken).
 define internal i32 @local(i32 %a, i32 %b, i32 %c, i64 %d, i32 %e) noinline {
   ret i32 %e
 }

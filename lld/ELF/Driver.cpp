@@ -3578,6 +3578,10 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   if (ctx.arg.emachine == EM_RISCV)
     mergeRISCVAttributesSections(ctx);
 
+  // Check and merge the RX calling-convention notes (.note.rx.abi).
+  if (ctx.arg.emachine == EM_RX)
+    mergeRXAbiNotes(ctx);
+
   {
     llvm::TimeTraceScope timeScope("Assign sections");
 

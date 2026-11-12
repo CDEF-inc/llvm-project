@@ -888,7 +888,9 @@ static void analyzeRXArguments(CCState &State,
 // (assigned by the subtarget's convention) differ from those of the other
 // convention, so that the object's ABI note (RXAsmPrinter) says whether it
 // depends on the convention. Only calls between objects matter: a function
-// with local linkage, or a call to one, is not counted.
+// with local linkage whose address is not taken, or a direct call to a
+// function with local linkage, is not counted. (An address-taken one, such
+// as a callback passed to another object, may be called from elsewhere.)
 template <typename ArgT>
 static void noteABIDependence(MachineFunction &MF, CallingConv::ID CallConv,
                               bool IsVarArg, const SmallVectorImpl<ArgT> &Args,
@@ -925,7 +927,8 @@ SDValue RXTargetLowering::LowerFormalArguments(
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
   analyzeRXArguments(CCInfo, Ins, STI.isGNUABI());
-  if (!MF.getFunction().hasLocalLinkage())
+  const Function &F = MF.getFunction();
+  if (!F.hasLocalLinkage() || F.hasAddressTaken())
     noteABIDependence(MF, CallConv, IsVarArg, Ins, ArgLocs, STI.isGNUABI());
 
   for (const CCValAssign &VA : ArgLocs) {
