@@ -44,3 +44,11 @@ bra.a 8388608
 # CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
 bsr.a -8388609
 # CHECK: :[[@LINE-1]]:7: error: invalid operand for instruction
+
+# cr 1 (PC) is reserved for mvtc and popc; mvfc and pushc read it.
+mvtc r1, pc
+# CHECK: :[[@LINE-1]]:10: error: invalid operand for instruction
+mvtc #1, pc
+# CHECK: :[[@LINE-1]]:10: error: invalid operand for instruction
+popc pc
+# CHECK: :[[@LINE-1]]:6: error: invalid operand for instruction

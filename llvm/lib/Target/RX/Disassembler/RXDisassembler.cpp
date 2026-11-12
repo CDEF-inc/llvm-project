@@ -161,6 +161,15 @@ static DecodeStatus DecodeCTRLRegisterClass(MCInst &MI, uint64_t RegNo,
   return decodeReg(MI, RegNo, CTRLDecoderTable);
 }
 
+// MVTC and POPC: cr 1 (PC) is reserved.
+static DecodeStatus DecodeCTRLWRegisterClass(MCInst &MI, uint64_t RegNo,
+                                             uint64_t Address,
+                                             const MCDisassembler *Decoder) {
+  if (RegNo == 1)
+    return MCDisassembler::Fail;
+  return DecodeCTRLRegisterClass(MI, RegNo, Address, Decoder);
+}
+
 static DecodeStatus DecodeTRCTRLRegisterClass(MCInst &MI, uint64_t RegNo,
                                               uint64_t Address,
                                               const MCDisassembler *Decoder) {

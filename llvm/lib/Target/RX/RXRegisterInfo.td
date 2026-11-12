@@ -91,6 +91,14 @@ def CTRL : RegisterClass<"RX", [i32], 32,
   let isAllocatable = 0;
 }
 
+// The control registers MVTC and POPC write: all but PC, whose cr (1) is
+// reserved for them (MVFC and PUSHC read it).
+def CTRLW : RegisterClass<"RX", [i32], 32,
+                          (add PSW, USP, FPSW, BPSW, BPC, ISP, FINTV,
+                               INTB, EXTB, IVC, WPRI, WID)> {
+  let isAllocatable = 0;
+}
+
 // The root-world control registers of TRMVTC / TRMVFC (RXv3e).
 def TRCTRL : RegisterClass<"RX", [i32], 32,
                            (add IVC, BPSW, BPC, ISP, INTB, EXTB, TRCTB,
