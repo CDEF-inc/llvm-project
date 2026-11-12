@@ -115,17 +115,18 @@ define %s20 @L_d5(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) {
   %r4 = insertvalue %s20 %r3, i32 %e, 4
   ret %s20 %r4
 }
-; With a byval argument on the stack and one after it in R2.
+; With a byval argument on the stack and one after it in R1 (CC-RX does not
+; count the byval argument; GNURX would use R2).
 define %s20 @L_dv(ptr byval(%s6) align 1 %x, i32 %y) {
 ; CHECK-LABEL: L_dv:
 ; CHECK:       ; %bb.0:
+; CHECK-NEXT:    mov.l r1, 16[r15]
+; CHECK-NEXT:    mov.l r1, 4[r15]
+; CHECK-NEXT:    movu.b 9[r0], r1
+; CHECK-NEXT:    mov.l r1, [r15]
+; CHECK-NEXT:    mov.l #0, 12[r15]
+; CHECK-NEXT:    mov.l #0, 8[r15]
 ; CHECK-NEXT:    mov.l r15, r1
-; CHECK-NEXT:    mov.l r3, 16[r1]
-; CHECK-NEXT:    mov.l r3, 4[r1]
-; CHECK-NEXT:    movu.b 9[r0], r2
-; CHECK-NEXT:    mov.l r2, [r1]
-; CHECK-NEXT:    mov.l #0, 12[r1]
-; CHECK-NEXT:    mov.l #0, 8[r1]
 ; CHECK-NEXT:    rts
   %p = getelementptr i8, ptr %x, i32 5
   %c = load i8, ptr %p

@@ -1,11 +1,22 @@
-// RUN: %clang_cc1 -triple rx-none-elf -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -triple rx-none-elf -emit-llvm -o - %s \
+// RUN:   | FileCheck %s --check-prefixes=CHECK,CCRX
+// RUN: %clang_cc1 -triple rx-none-elf -target-abi ccrx -emit-llvm -o - %s \
+// RUN:   | FileCheck %s --check-prefixes=CHECK,CCRX
+// RUN: %clang_cc1 -triple rx-none-elf -target-abi gnu -emit-llvm -o - %s \
+// RUN:   | FileCheck %s --check-prefixes=CHECK,GNU
+// RUN: not %clang_cc1 -triple rx-none-elf -target-abi foo -emit-llvm %s \
+// RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
 
-// The C ABI of GCC for rx-elf (gcc/config/rx/rx.cc): arguments fill R1-R4
-// by a running byte count; a structure whose size is a multiple of 4 goes in
-// registers as [N x i32] if it fits, any other structure (or one that does
-// not fit) is copied to the stack at its natural alignment (byval).
-// Structures of 1-16 bytes whose size is a multiple of 4 are returned in
-// R1-R4, the others in memory (sret, R15).
+// BAD: error: unknown target ABI 'foo'
+
+// The C ABI of CC-RX (the default; CC-RX manual 9.1) and of GNURX
+// (-target-abi gnu; gcc/config/rx/rx.cc): arguments fill R1-R4 by a byte
+// count; a structure whose size is a multiple of 4 goes in registers as
+// [N x i32] if it fits, any other structure (or one that does not fit) is
+// copied to the stack at its natural alignment (byval). CC-RX counts only
+// the arguments placed in registers, GNURX all of them. Structures of 1-16
+// bytes whose size is a multiple of 4 are returned in R1-R4, the others in
+// memory (sret, R15).
 
 struct s1 { char c; };
 struct s2 { char c[2]; };
@@ -26,10 +37,11 @@ struct empty {};
 union u8 { int i; char c[8]; };
 struct __attribute__((aligned(8))) sa8 { int a; };
 
-// char, short and _Bool arguments are not promoted (the callee extends
-// them); return values are.
+// char, short and _Bool arguments are extended by the caller (CC-RX's
+// callee relies on it; the backend extends them again in the callee for
+// GNURX's callers), and so are return values.
 
-// CHECK-LABEL: define{{.*}} void @f_char(i8 noundef %c, i8 noundef %s, i16 noundef %h, i16 noundef %uh, i8 noundef %b.coerce)
+// CHECK-LABEL: define{{.*}} void @f_char(i8 noundef signext %c, i8 noundef signext %s, i16 noundef signext %h, i16 noundef zeroext %uh, i8 noundef zeroext %b.coerce)
 void f_char(char c, signed char s, short h, unsigned short uh, _Bool b) {}
 // CHECK-LABEL: define{{.*}} zeroext i8 @r_uchar()
 unsigned char r_uchar(void) { return 1; }
@@ -63,8 +75,8 @@ void f_sf2(struct sf2 a) {}
 // CHECK-LABEL: define{{.*}} void @f_union([2 x i32] %a.coerce)
 void f_union(union u8 a) {}
 
-// Sizes that are not a multiple of 4: on the stack at their own alignment,
-// and the count still advances by the size rounded up to 4.
+// Sizes that are not a multiple of 4: on the stack at their own alignment.
+// GNURX advances the count by the size rounded up to 4, CC-RX does not.
 // CHECK-LABEL: define{{.*}} void @f_odd(ptr noundef byval(%struct.s1) align 1 %a, ptr noundef byval(%struct.s2) align 1 %b, ptr noundef byval(%struct.s3) align 1 %c, ptr noundef byval(%struct.s5) align 1 %d)
 void f_odd(struct s1 a, struct s2 b, struct s3 c, struct s5 d) {}
 // CHECK-LABEL: define{{.*}} void @f_s6(ptr noundef byval(%struct.s6) align 2 %a, i32 noundef %x)
@@ -73,13 +85,14 @@ void f_s6(struct s6 a, int x) {}
 // CHECK-LABEL: define{{.*}} void @f_s3_s12(ptr noundef byval(%struct.s3) align 1 %a, [3 x i32] %b.coerce)
 void f_s3_s12(struct s3 a, struct s12 b) {}
 
-// Structures that do not fit in what is left of R1-R4.
-// The count advances past a structure on the stack: 8 + 12 = 20, so d is on
-// the stack too.
-// CHECK-LABEL: define{{.*}} void @f_nofit(i32 noundef %a, i32 noundef %b, ptr noundef byval(%struct.s12) align 4 %c, ptr noundef byval(%struct.s4) align 4 %d)
+// Structures that do not fit in what is left of R1-R4. CC-RX puts d in R3,
+// which c did not take; for GNURX the count advances past c (8 + 12 = 20),
+// so d is on the stack too.
+// CCRX-LABEL: define{{.*}} void @f_nofit(i32 noundef %a, i32 noundef %b, ptr noundef byval(%struct.s12) align 4 %c, i32 %d.coerce)
+// GNU-LABEL: define{{.*}} void @f_nofit(i32 noundef %a, i32 noundef %b, ptr noundef byval(%struct.s12) align 4 %c, ptr noundef byval(%struct.s4) align 4 %d)
 void f_nofit(int a, int b, struct s12 c, struct s4 d) {}
-// But a structure that does not go in registers only advances it by its
-// size rounded up to 4: y is in R2.
+// But a structure that does not go in registers advances GNURX's count only
+// by its size rounded up to 4: y is in R2 (in R1 for CC-RX).
 // CHECK-LABEL: define{{.*}} void @f_s3_int(ptr noundef byval(%struct.s3) align 1 %a, i32 noundef %y)
 void f_s3_int(struct s3 a, int y) {}
 // A char-only structure on the stack is packed at byte alignment.
@@ -133,6 +146,9 @@ _Complex char r_cchar(void) { return 1; }
 _Complex float r_cfloat(void) { return 1; }
 // CHECK-LABEL: define{{.*}} [4 x i32] @r_cdouble()
 _Complex double r_cdouble(void) { return 1; }
-// CHECK-LABEL: define{{.*}} void @f_cplx(i16 noundef %a.coerce, [2 x i32] noundef %b.coerce, ptr noundef byval({ double, double }) align 4 %c, ptr noundef byval({ i8, i8 }) align 1 %d)
+// c does not fit after 8 bytes; d then takes R3 for CC-RX (as CC-RX puts
+// an int after a _Complex double that does not fit), the stack for GNURX.
+// CCRX-LABEL: define{{.*}} void @f_cplx(i16 noundef %a.coerce, [2 x i32] noundef %b.coerce, ptr noundef byval({ double, double }) align 4 %c, i16 noundef %d.coerce)
+// GNU-LABEL: define{{.*}} void @f_cplx(i16 noundef %a.coerce, [2 x i32] noundef %b.coerce, ptr noundef byval({ double, double }) align 4 %c, ptr noundef byval({ i8, i8 }) align 1 %d)
 void f_cplx(_Complex char a, _Complex float b, _Complex double c,
             _Complex char d) {}

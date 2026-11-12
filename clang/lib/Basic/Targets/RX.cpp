@@ -154,7 +154,10 @@ void RXTargetInfo::getTargetDefines(const LangOptions &Opts,
   if (HasDFPU)
     Builder.defineMacro("__RX_DFPU_INSNS__");
   Builder.defineMacro("__RX_GAS_SYNTAX__");
-  // Stacked arguments are naturally aligned (not GCC's -mgcc-abi).
+  // Stacked arguments are naturally aligned (not GCC's -mgcc-abi), in both
+  // calling conventions; GCC's __RX_GCC_ABI__ is that other ABI, so it is
+  // not defined. __RX_CCRX_ABI__ / __RX_GNU_ABI__ tell the two apart.
   Builder.defineMacro("__RX_ABI__");
+  Builder.defineMacro(ABI == "gnu" ? "__RX_GNU_ABI__" : "__RX_CCRX_ABI__");
   Builder.defineMacro("__RX_ALLOW_STRING_INSNS__");
 }

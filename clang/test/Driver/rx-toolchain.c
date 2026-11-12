@@ -127,4 +127,15 @@
 // RUN:   -fno-integrated-as -misa=v3 -c %s 2>&1 | FileCheck --check-prefix=AS3 %s
 // AS3: "{{.*}}as" "-m64bit-doubles" "-mcpu=rxv3"
 
+// The calling convention: CC-RX's unless -mabi=gnu.
+// RUN: %clang -### --target=rx-none-elf -c %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=ABI-DEF %s
+// ABI-DEF-NOT: "-target-abi"
+// RUN: %clang -### --target=rx-none-elf -mabi=gnu -c %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=ABI-GNU %s
+// ABI-GNU: "-cc1" {{.*}}"-target-abi" "gnu"
+// RUN: %clang -### --target=rx-none-elf -mabi=ccrx -c %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=ABI-CCRX %s
+// ABI-CCRX: "-cc1" {{.*}}"-target-abi" "ccrx"
+
 int main(void) { return 0; }

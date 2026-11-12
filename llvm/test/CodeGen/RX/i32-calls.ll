@@ -81,6 +81,8 @@ define i32 @t_call_c(i32 %x, i32 %y) {
 define signext i8 @t_char(i8 signext %a, i8 signext %b) {
 ; CHECK-LABEL: t_char:
 ; CHECK:       ; %bb.0:
+; CHECK-NEXT:    mov.b r2, r2
+; CHECK-NEXT:    mov.b r1, r1
 ; CHECK-NEXT:    add r2, r1
 ; CHECK-NEXT:    mov.b r1, r1
 ; CHECK-NEXT:    rts

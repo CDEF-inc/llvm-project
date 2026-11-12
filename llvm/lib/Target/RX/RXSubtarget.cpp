@@ -13,6 +13,8 @@
 #include "RXSubtarget.h"
 #include "RX.h"
 #include "RXSelectionDAGInfo.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -35,7 +37,15 @@ RXSubtarget::RXSubtarget(const Triple &TT, const std::string &CPU,
                          const std::string &FS, const TargetMachine &TM)
     : RXGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS),
       InstrInfo(initializeSubtargetDependencies(CPU, FS)), FrameLowering(*this),
-      TLInfo(TM, *this), TSInfo(std::make_unique<RXSelectionDAGInfo>()) {}
+      TLInfo(TM, *this), TSInfo(std::make_unique<RXSelectionDAGInfo>()) {
+  // The calling convention: CC-RX's (the default) or GNURX's.
+  StringRef ABI = TM.Options.MCOptions.getABIName();
+  if (ABI == "gnu")
+    GNUABI = true;
+  else if (!ABI.empty() && ABI != "ccrx")
+    report_fatal_error("RX: unknown target ABI '" + ABI +
+                       "' (expected ccrx or gnu)");
+}
 
 RXSubtarget::~RXSubtarget() = default;
 
