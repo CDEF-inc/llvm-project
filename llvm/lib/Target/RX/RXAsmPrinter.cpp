@@ -14,18 +14,22 @@
 #include "MCTargetDesc/RXInstPrinter.h"
 #include "RX.h"
 #include "RXMCInstLower.h"
+#include "RXMachineFunctionInfo.h"
 #include "RXSubtarget.h"
 #include "TargetInfo/RXTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -41,6 +45,13 @@ public:
       : AsmPrinter(TM, std::move(Streamer), ID) {}
 
   StringRef getPassName() const override { return "RX Assembly Printer"; }
+
+  void emitFunctionBodyEnd() override {
+    if (MF->getInfo<RXMachineFunctionInfo>()->isABIDependent())
+      ABIDependent = true;
+  }
+
+  void emitEndOfAsmFile(Module &M) override { emitABINote(); }
 
   void emitInstruction(const MachineInstr *MI) override {
     switch (MI->getOpcode()) {
@@ -101,7 +112,42 @@ public:
 private:
   void emitCmpXchg(const MachineInstr &MI);
   void emitDFPU(const MachineInstr &MI);
+  void emitABINote();
+
+  // A function of the module calls or is called differently under the two
+  // calling conventions.
+  bool ABIDependent = false;
 };
+
+// The calling convention of the object, for the linker: lld refuses to link
+// objects that need different ones (lld/ELF/Arch/RX.cpp). It is an ELF note
+// in the section .note.rx.abi, owner "RX", type NT_RX_ABI (1), whose
+// descriptor is two words:
+//   - 1: the object depends on CC-RX's convention (the default), 2: on
+//     GNURX's (-target-abi gnu), 3: on neither: no function it defines or
+//     calls (other than within the object) passes its arguments differently
+//     under the two (see noteABIDependence in RXISelLowering.cpp);
+//   - the revision of the conventions, 1.
+// Objects without the note (GCC's, CC-RX's, hand-written assembly) are not
+// checked, except those of an older LLVM (see lld).
+void RXAsmPrinter::emitABINote() {
+  if (!TM.getTargetTriple().isOSBinFormatELF())
+    return;
+  bool GNU = TM.Options.MCOptions.getABIName() == "gnu";
+  unsigned Kind = !ABIDependent ? 3 : GNU ? 2 : 1;
+  OutStreamer->pushSection();
+  OutStreamer->switchSection(
+      OutContext.getELFSection(".note.rx.abi", ELF::SHT_NOTE, 0));
+  OutStreamer->emitValueToAlignment(Align(4));
+  OutStreamer->emitInt32(3); // namesz: "RX" and its NUL
+  OutStreamer->emitInt32(8); // descsz
+  OutStreamer->emitInt32(1); // NT_RX_ABI
+  OutStreamer->emitBytes(StringRef("RX\0", 3));
+  OutStreamer->emitValueToAlignment(Align(4));
+  OutStreamer->emitInt32(Kind);
+  OutStreamer->emitInt32(1);
+  OutStreamer->popSection();
+}
 
 // The DFPU pseudos (see RXInstrInfo.td). DMOV.L to or from DRLn / DRHn
 // moves the low / high word of DRn.

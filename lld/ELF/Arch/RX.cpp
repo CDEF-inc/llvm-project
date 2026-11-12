@@ -30,6 +30,17 @@
 // and PID bits, the string-instruction bits of the first input that sets
 // them, and the highest instruction set (RXv2 / RXv3) of the inputs.
 //
+// The calling convention: LLVM records in each object (an ELF note in
+// .note.rx.abi, RXAsmPrinter.cpp) whether it depends on CC-RX's convention,
+// on GNURX's, or on neither. Linking objects that depend on different ones
+// is an error (-z rx-abi-check=warning makes it a warning, =none skips the
+// check). So is linking one that depends on CC-RX's with an object of an
+// older LLVM, which has no note and followed GNURX's convention; such an
+// object is told by its .comment (clang or rustc). Objects without the note
+// otherwise (GCC's, CC-RX's, assembly) are not checked. The output gets one
+// note for all the inputs (mergeRXAbiNotes), which counts an older LLVM's
+// objects as GNURX's, so that an ld -r output keeps what they depend on.
+//
 //===----------------------------------------------------------------------===//
 
 #include "InputFiles.h"
@@ -58,6 +69,11 @@ static constexpr uint32_t EF_RX_SINSNS_MASK = 3 << 6;
 static constexpr uint32_t EF_RX_V2 = 1 << 8;
 static constexpr uint32_t EF_RX_V3 = 1 << 9;
 
+// The ABI note (RXAsmPrinter.cpp): owner "RX", type NT_RX_ABI; descriptor
+// the convention the object depends on (below) and its revision.
+static constexpr uint32_t NT_RX_ABI = 1;
+enum RxAbi : uint32_t { ABI_CCRX = 1, ABI_GNU = 2, ABI_NEUTRAL = 3 };
+
 namespace {
 class RX final : public TargetInfo {
 public:
@@ -69,6 +85,7 @@ public:
                 uint64_t val) const override;
   bool relaxOnce(int pass) const override;
   void finalizeRelax(int passes) const override;
+
 };
 } // namespace
 
@@ -87,6 +104,153 @@ RX::RX(Ctx &ctx) : TargetInfo(ctx) {
   defaultMaxPageSize = 4;
   defaultCommonPageSize = 4;
   defaultImageBase = 0;
+}
+
+// What an input says about the calling convention: from its ABI notes (an
+// object of ld -r may have several), else from its .comment.
+namespace {
+struct AbiInfo {
+  bool ccrx = false, gnu = false; // it depends on that convention
+  bool old = false;               // an older LLVM's (GNURX's convention)
+  bool noted = false;             // it has an ABI note
+};
+} // namespace
+
+static AbiInfo readAbi(ObjFile<ELF32LE> *f) {
+  AbiInfo info;
+  const ELFFile<ELF32LE> &obj = f->getObj();
+  ArrayRef<ELF32LE::Shdr> sections = f->template getELFShdrs<ELF32LE>();
+  Expected<StringRef> shstrtab = obj.getSectionStringTable(sections);
+  if (!shstrtab) {
+    consumeError(shstrtab.takeError());
+    return info;
+  }
+  bool noted = false, llvm = false;
+  for (const ELF32LE::Shdr &sec : sections) {
+    Expected<StringRef> name = obj.getSectionName(sec, *shstrtab);
+    if (!name) {
+      consumeError(name.takeError());
+      continue;
+    }
+    bool comment = *name == ".comment";
+    if (!comment && *name != ".note.rx.abi")
+      continue;
+    Expected<ArrayRef<uint8_t>> data = obj.getSectionContents(sec);
+    if (!data) {
+      consumeError(data.takeError());
+      continue;
+    }
+    if (comment) {
+      StringRef s = toStringRef(*data);
+      llvm |= s.contains("clang version") || s.contains("rustc version");
+      continue;
+    }
+    // Notes: namesz, descsz, type, name and descriptor padded to 4.
+    for (ArrayRef<uint8_t> d = *data; d.size() >= 12;) {
+      uint32_t namesz = read32le(d.data()), descsz = read32le(d.data() + 4);
+      uint32_t type = read32le(d.data() + 8);
+      size_t size = 12 + alignTo(namesz, 4) + alignTo(descsz, 4);
+      if (size > d.size())
+        break;
+      StringRef owner = toStringRef(d.slice(12, namesz)).rtrim('\0');
+      if (owner == "RX" && type == NT_RX_ABI && descsz >= 4) {
+        noted = true;
+        uint32_t abi = read32le(d.data() + 12 + alignTo(namesz, 4));
+        info.ccrx |= abi == ABI_CCRX;
+        info.gnu |= abi == ABI_GNU;
+      }
+      d = d.drop_front(size);
+    }
+  }
+  info.old = !noted && llvm;
+  info.noted = noted;
+  return info;
+}
+
+// The output's ABI note: one for all the inputs.
+namespace {
+class RXAbiNoteSection final : public SyntheticSection {
+public:
+  RXAbiNoteSection(Ctx &ctx, uint32_t abi)
+      : SyntheticSection(ctx, ".note.rx.abi", SHT_NOTE, 0, 4), abi(abi) {}
+  size_t getSize() const override { return 24; }
+  void writeTo(uint8_t *buf) override {
+    write32le(buf, 3);          // namesz: "RX" and its NUL
+    write32le(buf + 4, 8);      // descsz
+    write32le(buf + 8, NT_RX_ABI);
+    memcpy(buf + 12, "RX\0", 4); // the name, padded to 4
+    write32le(buf + 16, abi);
+    write32le(buf + 20, 1);     // the revision
+  }
+
+private:
+  uint32_t abi;
+};
+} // namespace
+
+// Checks the inputs' calling conventions and replaces their ABI notes with
+// one: CC-RX's if an input depends on it, else GNURX's if one depends on it
+// or comes from an older LLVM, else neither. Without any note in the inputs
+// the output gets none either (an older LLVM's objects are then still told
+// by their .comment).
+void elf::mergeRXAbiNotes(Ctx &ctx) {
+  InputFile *ccrx = nullptr, *gnu = nullptr, *old = nullptr;
+  bool noted = false;
+  for (InputFile *f : ctx.objectFiles) {
+    AbiInfo info = readAbi(cast<ObjFile<ELF32LE>>(f));
+    if (info.ccrx && !ccrx)
+      ccrx = f;
+    if (info.gnu && !gnu)
+      gnu = f;
+    if (info.old && !old)
+      old = f;
+    noted |= info.noted;
+  }
+
+  size_t place = ctx.inputSections.size();
+  for (size_t i = 0; i != ctx.inputSections.size(); ++i)
+    if (ctx.inputSections[i]->type == SHT_NOTE &&
+        ctx.inputSections[i]->name == ".note.rx.abi") {
+      place = i;
+      break;
+    }
+  llvm::erase_if(ctx.inputSections, [](InputSectionBase *s) {
+    return s->type == SHT_NOTE && s->name == ".note.rx.abi";
+  });
+  if (noted) {
+    uint32_t abi = ccrx ? ABI_CCRX : (gnu || old) ? ABI_GNU : ABI_NEUTRAL;
+    ctx.in.rxAbiNote = std::make_unique<RXAbiNoteSection>(ctx, abi);
+    ctx.inputSections.insert(ctx.inputSections.begin() + place,
+                             ctx.in.rxAbiNote.get());
+  }
+
+  if (ctx.arg.zRxAbiCheck == 0)
+    return;
+  auto report = [&](auto &&fn) {
+    if (ctx.arg.zRxAbiCheck == 2) {
+      auto diag = Err(ctx);
+      fn(diag);
+    } else {
+      auto diag = Warn(ctx);
+      fn(diag);
+    }
+  };
+  if (ccrx && gnu)
+    report([&](auto &diag) {
+      diag << ccrx << " uses CC-RX's calling convention (-mabi=ccrx) and "
+           << gnu << " GNURX's (-mabi=gnu): calls between them may pass "
+           << "arguments in different places; build them with the same "
+              "convention (-z rx-abi-check=warning to link anyway)";
+    });
+  if (ccrx && old)
+    report([&](auto &diag) {
+      diag << old << " was built by an older LLVM for RX (no ABI note, "
+           << "toolchain-2026-11-12 or older), which follows GNURX's calling "
+              "convention, and "
+           << ccrx << " uses CC-RX's: calls between them may pass arguments "
+           << "in different places; rebuild " << old
+           << " with this toolchain (-z rx-abi-check=warning to link anyway)";
+    });
 }
 
 // GNU ld's RX emulation does not warn about mismatched flags by default

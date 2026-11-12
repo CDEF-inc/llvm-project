@@ -529,6 +529,26 @@ static uint8_t getZStartStopVisibility(Ctx &ctx, opt::InputArgList &args) {
   return ret;
 }
 
+static uint8_t getZRxAbiCheck(Ctx &ctx, opt::InputArgList &args) {
+  uint8_t ret = 2;
+  for (auto *arg : args.filtered(OPT_z)) {
+    std::pair<StringRef, StringRef> kv = StringRef(arg->getValue()).split('=');
+    if (kv.first == "rx-abi-check") {
+      arg->claim();
+      if (kv.second == "error")
+        ret = 2;
+      else if (kv.second == "warning")
+        ret = 1;
+      else if (kv.second == "none")
+        ret = 0;
+      else
+        ErrAlways(ctx) << "unknown -z rx-abi-check= value: "
+                       << StringRef(kv.second);
+    }
+  }
+  return ret;
+}
+
 static GcsPolicy getZGcs(Ctx &ctx, opt::InputArgList &args) {
   GcsPolicy ret = GcsPolicy::Implicit;
   for (auto *arg : args.filtered(OPT_z)) {
@@ -1683,6 +1703,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.zStartStopGC =
       getZFlag(args, "start-stop-gc", "nostart-stop-gc", true);
   ctx.arg.zStartStopVisibility = getZStartStopVisibility(ctx, args);
+  ctx.arg.zRxAbiCheck = getZRxAbiCheck(ctx, args);
   ctx.arg.zText = getZFlag(args, "text", "notext", true);
   ctx.arg.zWxneeded = hasZOption(args, "wxneeded");
   setUnresolvedSymbolPolicy(ctx, args);
@@ -3556,6 +3577,10 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // Merge .riscv.attributes sections.
   if (ctx.arg.emachine == EM_RISCV)
     mergeRISCVAttributesSections(ctx);
+
+  // Check and merge the RX calling-convention notes (.note.rx.abi).
+  if (ctx.arg.emachine == EM_RX)
+    mergeRXAbiNotes(ctx);
 
   {
     llvm::TimeTraceScope timeScope("Assign sections");
