@@ -15,6 +15,7 @@
 #include "RXMCAsmInfo.h"
 #include "TargetInfo/RXTargetInfo.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -32,6 +33,57 @@ using namespace llvm;
 
 #define GET_REGINFO_MC_DESC
 #include "RXGenRegisterInfo.inc"
+
+const char *llvm::checkRXRegisterOperands(const MCInst &MI,
+                                          const MCRegisterInfo &MRI) {
+  auto Enc = [&](unsigned Op) {
+    return MRI.getEncodingValue(MI.getOperand(Op).getReg());
+  };
+  switch (MI.getOpcode()) {
+  case RX::PUSHM:
+  case RX::POPM:
+    if (Enc(0) == 0)
+      return "R0 cannot be in the register range";
+    if (Enc(0) >= Enc(1))
+      return "the first register of the range must be below the last";
+    return nullptr;
+  case RX::RTSD_irr:
+    if (Enc(1) == 0)
+      return "R0 cannot be in the register range";
+    if (Enc(1) > Enc(2))
+      return "register range must be ascending";
+    return nullptr;
+#define EMUL_FORMS(N)                                                          \
+  case RX::N##_rr:                                                             \
+  case RX::N##_ri8:                                                            \
+  case RX::N##_ri16:                                                           \
+  case RX::N##_ri24:                                                           \
+  case RX::N##_ri32:                                                           \
+  case RX::N##_mUB_0:                                                          \
+  case RX::N##_mUB_8:                                                          \
+  case RX::N##_mUB_16:                                                         \
+  case RX::N##_mB_0:                                                           \
+  case RX::N##_mB_8:                                                           \
+  case RX::N##_mB_16:                                                          \
+  case RX::N##_mW_0:                                                           \
+  case RX::N##_mW_8:                                                           \
+  case RX::N##_mW_16:                                                          \
+  case RX::N##_mL_0:                                                           \
+  case RX::N##_mL_8:                                                           \
+  case RX::N##_mL_16:                                                          \
+  case RX::N##_mUW_0:                                                          \
+  case RX::N##_mUW_8:                                                          \
+  case RX::N##_mUW_16:
+    EMUL_FORMS(EMUL)
+    EMUL_FORMS(EMULU)
+#undef EMUL_FORMS
+    if (Enc(0) == 15)
+      return "the result pair Rd:Rd+1 cannot start at R15";
+    return nullptr;
+  default:
+    return nullptr;
+  }
+}
 
 static MCInstrInfo *createRXMCInstrInfo() {
   auto *X = new MCInstrInfo();

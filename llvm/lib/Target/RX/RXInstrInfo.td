@@ -1651,6 +1651,52 @@ def TST_rr : RXInst24<(outs), (ins GPR:$rd, GPR:$rs), "tst\t$rs, $rd"> {
   let Inst{3-0} = rd;
 }
 
+// tst #imm, Rs: 1111 1101 0111 li00 1100 rs imm (AluFD70's encoding, with
+// no result: only the flags).
+let Defs = [PSW] in {
+def TST_ri8 : RXInst32<(outs), (ins GPR:$rd, imms8:$imm), "tst\t$imm, $rd"> {
+  bits<4> rd;
+  bits<8> imm;
+  let Inst{31-16} = 0xfd74;
+  let Inst{15-12} = 0xc;
+  let Inst{11-8} = rd;
+  let Inst{7-0} = imm;
+}
+def TST_ri16 : RXInst40<(outs), (ins GPR:$rd, imms16:$imm),
+                        "tst\t$imm, $rd"> {
+  bits<4> rd;
+  bits<16> imm;
+  let Inst{39-24} = 0xfd78;
+  let Inst{23-20} = 0xc;
+  let Inst{19-16} = rd;
+  let Inst{15-8} = imm{7-0};
+  let Inst{7-0} = imm{15-8};
+}
+def TST_ri24 : RXInst48<(outs), (ins GPR:$rd, imms24:$imm),
+                        "tst\t$imm, $rd"> {
+  bits<4> rd;
+  bits<24> imm;
+  let Inst{47-32} = 0xfd7c;
+  let Inst{31-28} = 0xc;
+  let Inst{27-24} = rd;
+  let Inst{23-16} = imm{7-0};
+  let Inst{15-8} = imm{15-8};
+  let Inst{7-0} = imm{23-16};
+}
+def TST_ri32 : RXInst56<(outs), (ins GPR:$rd, imm32:$imm),
+                        "tst\t$imm, $rd"> {
+  bits<4> rd;
+  bits<32> imm;
+  let Inst{55-40} = 0xfd70;
+  let Inst{39-36} = 0xc;
+  let Inst{35-32} = rd;
+  let Inst{31-24} = imm{7-0};
+  let Inst{23-16} = imm{15-8};
+  let Inst{15-8} = imm{23-16};
+  let Inst{7-0} = imm{31-24};
+}
+}
+
 // FD 70-prefixed immediate operations.
 let Uses = [PSW] in
 defm ADC   : AluFD70<0x2, "adc">;
@@ -2104,6 +2150,11 @@ foreach C = [CC_EQ, CC_NE, CC_GEU, CC_LTU, CC_GTU, CC_LEU, CC_PZ, CC_N,
     let Inst{7-4} = rd;
     let Inst{3-0} = C.Value;
   }
+// Alternative condition names (the RX manual's SCZ / SCNZ / SCC / SCNC, as
+// in GNU as); the memory forms' are with them below.
+foreach A = [["z", "EQ"], ["nz", "NE"], ["c", "GEU"], ["nc", "LTU"]] in
+def : InstAlias<"sc"#A[0]#".l\t$rd",
+                (!cast<Instruction>("SC"#A[1]#"_L") GPR:$rd), 0>;
 
 // stz / stnz: Rd = #imm (or Rs) if Z is set / clear.
 let Uses = [PSW] in {
@@ -3622,4 +3673,63 @@ def : InstAlias<"bm"#A[0]#"\t$imm, $dsp[$rd].b",
 def : InstAlias<"bm"#A[0]#"\t$imm, $dsp[$rd].b",
                 (!cast<Instruction>(A[1]#"_im16") immu3:$imm, GPR:$rd,
                  dsp16b:$dsp), 0>;
+}
+
+// sc<cond>.size [Rd] / dsp[Rd]: the memory = cond ? 1 : 0
+//   1111 1100 1101 sz ld rd cond   (sz 00 .b, 01 .w, 10 .l; ld 00 [Rd],
+//   01 dsp:8, 10 dsp:16; ld 11 with sz 10 is sc<cond>.l Rd)
+class RXSz<string n, bits<2> v> {
+  string Name = n;
+  bits<2> Value = v;
+}
+def SZ_B : RXSz<"b", 0b00>;
+def SZ_W : RXSz<"w", 0b01>;
+def SZ_L : RXSz<"l", 0b10>;
+
+multiclass SCondMem<int cond, string mn, RXSz S, Operand d8, Operand d16> {
+  def _m0 : MemF20<(outs), (ins GPR:$rd), mn#"\t[$rd]"> {
+    bits<4> rd;
+    let Head{15-4} = 0xfcd;
+    let Head{3-2} = S.Value;
+    let Head{1-0} = 0b00;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+  def _m8 : MemF21<(outs), (ins GPR:$rd, d8:$dsp), mn#"\t$dsp[$rd]"> {
+    bits<4> rd;
+    let Head{15-4} = 0xfcd;
+    let Head{3-2} = S.Value;
+    let Head{1-0} = 0b01;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+  def _m16 : MemF22<(outs), (ins GPR:$rd, d16:$dsp), mn#"\t$dsp[$rd]"> {
+    bits<4> rd;
+    let Head{15-4} = 0xfcd;
+    let Head{3-2} = S.Value;
+    let Head{1-0} = 0b10;
+    let Mid{7-4} = rd;
+    let Mid{3-0} = cond;
+  }
+}
+
+let Uses = [PSW], mayStore = 1 in
+foreach C = [CC_EQ, CC_NE, CC_GEU, CC_LTU, CC_GTU, CC_LEU, CC_PZ, CC_N,
+             CC_GE, CC_LT, CC_GT, CC_LE, CC_O, CC_NO] in
+foreach S = [SZ_B, SZ_W, SZ_L] in
+defm SC#!toupper(C.Name)#_#!toupper(S.Name)
+    : SCondMem<C.Value, "sc"#C.Name#"."#S.Name, S,
+               !cast<Operand>("dsp8"#S.Name), !cast<Operand>("dsp16"#S.Name)>;
+
+foreach A = [["z", "EQ"], ["nz", "NE"], ["c", "GEU"], ["nc", "LTU"]] in
+foreach S = ["b", "w", "l"] in {
+defvar I = "SC"#A[1]#"_"#!toupper(S);
+def : InstAlias<"sc"#A[0]#"."#S#"\t[$rd]",
+                (!cast<Instruction>(I#"_m0") GPR:$rd), 0>;
+def : InstAlias<"sc"#A[0]#"."#S#"\t$dsp[$rd]",
+                (!cast<Instruction>(I#"_m8") GPR:$rd,
+                 !cast<Operand>("dsp8"#S):$dsp), 0>;
+def : InstAlias<"sc"#A[0]#"."#S#"\t$dsp[$rd]",
+                (!cast<Instruction>(I#"_m16") GPR:$rd,
+                 !cast<Operand>("dsp16"#S):$dsp), 0>;
 }

@@ -36,6 +36,15 @@ MCTargetStreamer *createRXObjectTargetStreamer(MCStreamer &S,
 // instructions (smovf, sstr, ...) is marked in e_flags, as GNU as does.
 void noteRXInstruction(MCStreamer &S, unsigned Opcode);
 
+class MCInst;
+// Register operands the encoding can hold but the RX manual rules out, for
+// the assembler (an error) and the disassembler (not an instruction): the
+// register ranges of PUSHM / POPM (R1-R15, first below last) and RTSD
+// (R1-R15, ascending), and EMUL / EMULU, whose result pair Rd:Rd+1 cannot
+// start at R15. Returns the message, or null if the operands are valid.
+const char *checkRXRegisterOperands(const MCInst &MI,
+                                    const MCRegisterInfo &MRI);
+
 MCCodeEmitter *createRXMCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx);
 MCAsmBackend *createRXMCAsmBackend(const Target &T, const MCSubtargetInfo &STI,
                                    const MCRegisterInfo &MRI,
