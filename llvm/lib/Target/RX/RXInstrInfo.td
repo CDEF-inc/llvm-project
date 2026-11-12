@@ -1855,7 +1855,7 @@ class RXFlag<string n, int v> {
 
 let hasSideEffects = 1 in {
 // mvtc Rs, cr: 1111 1101 0110 100c rs cr   (c = cr bit 4; all cr here < 16)
-def MVTC_r : RXInst24<(outs CTRL:$cr), (ins GPR:$rs), "mvtc\t$rs, $cr"> {
+def MVTC_r : RXInst24<(outs CTRLW:$cr), (ins GPR:$rs), "mvtc\t$rs, $cr"> {
   bits<4> rs;
   bits<4> cr;
   let Inst{23-16} = 0xfd;
@@ -1914,7 +1914,7 @@ multiclass MvtcImm<bits<4> op, RegisterClass rc, string mn> {
     let Inst{7-0} = imm{31-24};
   }
 }
-defm MVTC : MvtcImm<0b0000, CTRL, "mvtc">;
+defm MVTC : MvtcImm<0b0000, CTRLW, "mvtc">;
 
 let Uses = [R0], Defs = [R0] in {
 // pushc cr: 0111 1110 110 cr / popc cr: 0111 1110 111 cr
@@ -1924,7 +1924,7 @@ def PUSHC : RXInst16<(outs), (ins CTRL:$cr), "pushc\t$cr"> {
   let Inst{7-4} = 0xc;
   let Inst{3-0} = cr;
 }
-def POPC : RXInst16<(outs CTRL:$cr), (ins), "popc\t$cr"> {
+def POPC : RXInst16<(outs CTRLW:$cr), (ins), "popc\t$cr"> {
   bits<4> cr;
   let Inst{15-8} = 0x7e;
   let Inst{7-4} = 0xe;

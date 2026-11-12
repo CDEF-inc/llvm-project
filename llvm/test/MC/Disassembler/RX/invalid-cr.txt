@@ -1,0 +1,21 @@
+# cr 1 (PC) is reserved for mvtc and popc: their bytes with cr 1 are not
+# those instructions (the disassembler then skips a byte and goes on, so
+# each case gets its own input). mvfc and pushc read PC.
+
+# RUN: echo '0xfd 0x68 0x11' | llvm-mc -triple=rx-none-elf -mcpu=rxv3e \
+# RUN:   --disassemble 2>&1 | FileCheck %s --check-prefix=BAD \
+# RUN:   --implicit-check-not=mvtc
+# RUN: echo '0xfd 0x77 0x01 0x01' | llvm-mc -triple=rx-none-elf -mcpu=rxv3e \
+# RUN:   --disassemble 2>&1 | FileCheck %s --check-prefix=BAD \
+# RUN:   --implicit-check-not=mvtc
+# RUN: echo '0x7e 0xe1' | llvm-mc -triple=rx-none-elf -mcpu=rxv3e \
+# RUN:   --disassemble 2>&1 | FileCheck %s --check-prefix=BAD \
+# RUN:   --implicit-check-not=popc
+# BAD: warning: invalid instruction encoding
+
+# RUN: llvm-mc -triple=rx-none-elf -mcpu=rxv3e --disassemble %s \
+# RUN:   | FileCheck %s
+# CHECK: mvfc pc, r1
+0xfd 0x6a 0x11
+# CHECK: pushc pc
+0x7e 0xc1
