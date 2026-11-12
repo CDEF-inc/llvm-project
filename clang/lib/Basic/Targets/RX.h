@@ -11,6 +11,11 @@
 // RX backend and of rustc's rx-none-elf). GCC's -m32bit-doubles is the
 // 64bit-doubles feature turned off.
 //
+// Two calling conventions (-mabi=): "ccrx", the default, is CC-RX's (CC-RX
+// manual 9.1), and "gnu" is GNURX's (rx-elf-gcc). They differ in which
+// registers the arguments after a stacked one take (CodeGen/Targets/RX.cpp)
+// and in wchar_t: unsigned short for CC-RX, long for GNURX.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LIB_BASIC_TARGETS_RX_H
@@ -28,6 +33,7 @@ class LLVM_LIBRARY_VISIBILITY RXTargetInfo : public TargetInfo {
   static const char *const GCCRegNames[];
 
   std::string CPU;
+  std::string ABI = "ccrx";
   bool HasFPU = false;
   bool HasDFPU = false;
 
@@ -45,7 +51,7 @@ public:
     SizeType = UnsignedLong;
     PtrDiffType = SignedLong;
     IntPtrType = SignedLong;
-    WCharType = SignedLong;
+    WCharType = UnsignedShort; // setABI
     WIntType = UnsignedInt;
     Char32Type = UnsignedLong;
     // C symbols carry a leading underscore (GCC's USER_LABEL_PREFIX), as the
@@ -80,6 +86,15 @@ public:
     if (BitWidth <= 32)
       return IsSigned ? SignedInt : UnsignedInt;
     return TargetInfo::getFastIntTypeByWidth(BitWidth, IsSigned);
+  }
+
+  StringRef getABI() const override { return ABI; }
+  bool setABI(const std::string &Name) override {
+    if (Name != "ccrx" && Name != "gnu")
+      return false;
+    ABI = Name;
+    WCharType = Name == "gnu" ? SignedLong : UnsignedShort;
+    return true;
   }
 
   bool isValidCPUName(StringRef Name) const override;

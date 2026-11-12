@@ -31,9 +31,8 @@ define i64 @sub64(i64 %a, i64 %b) {
 define i64 @pos3(i32 %a, i32 %b, i32 %c, i64 %x, i32 %y) {
 ; CHECK-LABEL: pos3:
 ; CHECK:       ; %bb.0:
-; CHECK-NEXT:    mov.l 12[r0], r1
-; CHECK-NEXT:    shar #31, r1, r3
-; CHECK-NEXT:    mov.l 4[r0], r4
+; CHECK-NEXT:    shar #31, r4, r3
+; CHECK-NEXT:    mov.l 4[r0], r1
 ; CHECK-NEXT:    mov.l 8[r0], r2
 ; CHECK-NEXT:    add r4, r1
 ; CHECK-NEXT:    adc r3, r2

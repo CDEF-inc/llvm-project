@@ -6,17 +6,20 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// The Renesas RX C ABI of GCC (rx-elf, the default -mrx-abi), as in
-// gcc/config/rx/rx.cc: rx_function_arg, rx_function_arg_advance,
-// rx_function_arg_boundary, rx_return_in_memory, rx_promote_function_mode.
-// rustc's rx-none-elf (compiler/rustc_target/src/callconv/rx.rs) makes the
-// same choices for aggregates.
+// The Renesas RX C ABI: CC-RX's (the default, -mabi=ccrx; CC-RX manual
+// 9.1) or GNURX's (-mabi=gnu; gcc/config/rx/rx.cc: rx_function_arg,
+// rx_function_arg_advance, rx_function_arg_boundary, rx_return_in_memory,
+// rx_promote_function_mode). rustc's rx-none-elf
+// (compiler/rustc_target/src/callconv/rx.rs) makes the same choices for
+// aggregates.
 //
-// Arguments fill R1-R4 by a running byte count, each argument rounded up to
-// 4 bytes; an argument goes in registers only if it fits entirely, and the
-// count advances for every argument. In a variadic function the unnamed
-// arguments and the last named one are on the stack. Stack arguments are at
-// their natural alignment and size (a char takes one byte).
+// Arguments fill R1-R4 by a byte count, each argument rounded up to 4 bytes;
+// an argument goes in registers only if it fits entirely. CC-RX advances the
+// count only for an argument placed in registers, so later ones still fill
+// the free registers; GNURX advances it for every argument. In a variadic
+// function the unnamed arguments and the last named one are on the stack.
+// Stack arguments are at their natural alignment and size (a char takes one
+// byte).
 //
 // The RX backend assigns the registers and stack slots with that count. The
 // frontend decides only how an aggregate travels: a structure whose size is
@@ -25,8 +28,10 @@
 // natural alignment. Structures of 1-16 bytes whose size is a multiple of 4
 // are returned in R1-R4, others in memory through a pointer in R15 (sret).
 //
-// Integer arguments are not promoted (the callee extends char and short),
-// while char and short return values are (the callee extends them).
+// char, short and _Bool arguments are extended by the caller (signext /
+// zeroext), which CC-RX's callee relies on; the RX backend extends them again
+// in the callee, since GNURX's caller does not. char and short return values
+// are extended by the callee in both.
 //
 //===----------------------------------------------------------------------===//
 
@@ -42,8 +47,12 @@ class RXABIInfo : public DefaultABIInfo {
   /// Bytes of arguments that fit in R1-R4.
   static constexpr uint64_t ArgRegBytes = 16;
 
+  /// GNURX's argument count (-mabi=gnu) instead of CC-RX's.
+  bool GNUABI;
+
 public:
-  RXABIInfo(CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
+  RXABIInfo(CodeGenTypes &CGT, bool GNUABI)
+      : DefaultABIInfo(CGT), GNUABI(GNUABI) {}
 
   void computeInfo(CGFunctionInfo &FI) const override;
   RValue EmitVAArg(CodeGenFunction &CGF, Address VAListAddr, QualType Ty,
@@ -80,8 +89,8 @@ private:
 
 class RXTargetCodeGenInfo : public TargetCodeGenInfo {
 public:
-  RXTargetCodeGenInfo(CodeGenTypes &CGT)
-      : TargetCodeGenInfo(std::make_unique<RXABIInfo>(CGT)) {}
+  RXTargetCodeGenInfo(CodeGenTypes &CGT, bool GNUABI)
+      : TargetCodeGenInfo(std::make_unique<RXABIInfo>(CGT, GNUABI)) {}
 };
 
 } // namespace
@@ -135,21 +144,31 @@ ABIArgInfo RXABIInfo::classifyArgumentType(QualType Ty, bool CanUseRegs,
                                            uint64_t &UsedBytes) const {
   Ty = useFirstFieldIfTransparentUnion(Ty);
 
+  // Advances the register count as the backend does (analyzeRXArguments):
+  // CC-RX counts only the arguments placed in registers, GNURX all.
+  auto Count = [&](uint64_t Bytes, bool InRegs) {
+    if (InRegs || GNUABI)
+      UsedBytes += llvm::alignTo(Bytes, 4);
+  };
+  auto Fits = [&](uint64_t Bytes) {
+    return CanUseRegs && UsedBytes + llvm::alignTo(Bytes, 4) <= ArgRegBytes;
+  };
+
   // C++ objects that must be passed by reference take a pointer.
   if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, getCXXABI())) {
-    UsedBytes += 4;
+    Count(4, Fits(4));
     return getNaturalAlignIndirect(Ty, getDataLayout().getAllocaAddrSpace(),
                                    RAA == CGCXXABI::RAA_DirectInMemory);
   }
 
   uint64_t Size = getContext().getTypeSize(Ty) / 8;
-  bool InRegs = CanUseRegs && UsedBytes + llvm::alignTo(Size, 4) <= ArgRegBytes;
-  UsedBytes += llvm::alignTo(Size, 4);
+  bool InRegs = Fits(Size);
 
   if (Ty->isAnyComplexType()) {
     // Not an aggregate for GCC: in registers whenever it fits (_Complex char
     // in the low 16 bits of a register), else on the stack at its natural
     // alignment.
+    Count(Size, InRegs);
     if (InRegs)
       return ABIArgInfo::getDirect(getIntegerParts(Size));
     return getByVal(Ty);
@@ -159,7 +178,9 @@ ABIArgInfo RXABIInfo::classifyArgumentType(QualType Ty, bool CanUseRegs,
     // GCC passes an empty structure on the stack, where it takes no room.
     if (Size == 0)
       return ABIArgInfo::getIgnore();
-    if (InRegs && Size % 4 == 0)
+    InRegs = InRegs && Size % 4 == 0;
+    Count(Size, InRegs);
+    if (InRegs)
       return ABIArgInfo::getDirect(getIntegerParts(Size));
     // On the stack at the type's own alignment: a 3-byte struct of chars
     // may be followed by another one at offset 3.
@@ -167,17 +188,21 @@ ABIArgInfo RXABIInfo::classifyArgumentType(QualType Ty, bool CanUseRegs,
   }
 
   if (const auto *EIT = Ty->getAs<BitIntType>())
-    if (EIT->getNumBits() > 64)
+    if (EIT->getNumBits() > 64) {
+      Count(Size, false);
       return getByVal(Ty);
+    }
 
-  // GCC does not promote char and short arguments: the caller leaves the
-  // upper bits of the register undefined (and puts a stacked char in one
-  // byte), and the callee extends the value itself. So no signext /
-  // zeroext, except that a _Bool must be 0 or 1 in its low byte.
-  if (Ty->isBooleanType())
-    return ABIArgInfo::getDirect(llvm::Type::getInt8Ty(getVMContext()));
+  // A scalar goes in registers whenever it fits (the backend decides).
+  Count(Size, InRegs);
   if (const auto *ED = Ty->getAsEnumDecl())
     Ty = ED->getIntegerType();
+  // char, short and _Bool are extended to int by the caller; on the stack
+  // they still take their own size. _Bool travels as i8.
+  if (Ty->isBooleanType())
+    return ABIArgInfo::getExtend(Ty, llvm::Type::getInt8Ty(getVMContext()));
+  if (isPromotableIntegerTypeForABI(Ty))
+    return ABIArgInfo::getExtend(Ty);
   return ABIArgInfo::getDirect(CGT.ConvertType(Ty));
 }
 
@@ -197,5 +222,6 @@ RValue RXABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
 
 std::unique_ptr<TargetCodeGenInfo>
 CodeGen::createRXTargetCodeGenInfo(CodeGenModule &CGM) {
-  return std::make_unique<RXTargetCodeGenInfo>(CGM.getTypes());
+  return std::make_unique<RXTargetCodeGenInfo>(
+      CGM.getTypes(), CGM.getTarget().getABI() == "gnu");
 }

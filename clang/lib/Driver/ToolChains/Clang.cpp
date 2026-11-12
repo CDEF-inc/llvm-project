@@ -1623,6 +1623,18 @@ void Clang::RenderTargetOptions(const llvm::Triple &EffectiveTriple,
   case llvm::Triple::ve:
     AddVETargetArgs(Args, CmdArgs);
     break;
+
+  case llvm::Triple::rx:
+    // The calling convention: CC-RX's (the default) or GNURX's.
+    if (const Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
+      StringRef ABI = A->getValue();
+      if (ABI != "ccrx" && ABI != "gnu")
+        TC.getDriver().Diag(diag::err_drv_unsupported_option_argument)
+            << A->getSpelling() << ABI;
+      CmdArgs.push_back("-target-abi");
+      CmdArgs.push_back(A->getValue());
+    }
+    break;
   }
 }
 

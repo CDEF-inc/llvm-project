@@ -40,6 +40,8 @@ class RXSubtarget : public RXGenSubtargetInfo {
   bool Has64BitDoubles = false;
   bool FlushDenormals = false;
   bool EnableRelax = false;
+  // The GNURX calling convention (-target-abi gnu) instead of CC-RX's.
+  bool GNUABI = false;
 
   RXInstrInfo InstrInfo;
   RXFrameLowering FrameLowering;
@@ -65,6 +67,7 @@ public:
   bool has64BitDoubles() const { return Has64BitDoubles; }
   bool flushDenormals() const { return FlushDenormals; }
   bool enableRelax() const { return EnableRelax; }
+  bool isGNUABI() const { return GNUABI; }
 
   const RXInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const RXFrameLowering *getFrameLowering() const override {

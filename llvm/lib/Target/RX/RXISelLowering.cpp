@@ -780,30 +780,37 @@ template <typename ArgT> static bool isNamedArg(const ArgT &Arg) {
   return !Arg.Flags.isVarArg();
 }
 
-// Assigns argument locations the way GCC does (rx_function_arg and
-// rx_function_arg_advance): a running byte count over R1-R4; an argument
-// goes in registers only if it fits entirely, and the count advances for
-// every argument, so once one argument spills, all later ones are on the
-// stack too. In a variadic function the unnamed arguments and the last
-// named one are on the stack. Stack arguments are naturally aligned (4 bytes
-// for int, float, pointers, i64 and double; see below for char and short)
-// and packed without padding.
+// Assigns argument locations by a byte count over R1-R4: an argument goes in
+// the next registers only if it fits entirely. In a variadic function the
+// unnamed arguments and the last named one are on the stack. Stack arguments
+// are naturally aligned (4 bytes for int, float, pointers, i64 and double;
+// see below for char and short) and packed without padding.
 // An sret pointer is passed in R15 and does not count.
 //
-// Structures: the frontend passes one that GCC would put in registers (size
-// a multiple of 4, at most 16 bytes) as integer parts, e.g. [N x i32], which
+// The two ABIs differ in what the count is:
+//   - CC-RX (the default; CC-RX manual 9.1.3): the count advances only for
+//     an argument placed in registers, so the arguments after one that went
+//     on the stack still fill the free registers: in f(int, int, int,
+//     long long, int) the long long is on the stack and the last int in R4.
+//   - GNURX (-target-abi gnu; rx_function_arg and rx_function_arg_advance in
+//     gcc/config/rx/rx.cc): the count advances for every argument, byval ones
+//     included (by the size rounded up to 4), so once one spills, all later
+//     ones are on the stack too.
+//
+// Structures: the frontend passes one that goes in registers (size a
+// multiple of 4, at most 16 bytes) as integer parts, e.g. [N x i32], which
 // are kept together like an i64; any other structure is passed byval. A
 // byval argument is copied to the stack at its own alignment (a 3-byte char
-// struct may be followed by another at offset 3) and advances the register
-// count by its size rounded up to 4, so later arguments may still go in
-// registers.
+// struct may be followed by another at offset 3).
 //
-// GCC does not promote char and short arguments: on the stack such an
-// argument takes its own size at its own alignment (two chars and a short
-// share one word), and the callee extends it.
+// char and short arguments are not promoted on the stack: such an argument
+// takes its own size at its own alignment (two chars and a short share one
+// word). In registers the caller extends them when the IR says signext /
+// zeroext (CC-RX's callee relies on it), and the callee extends them again
+// (GNURX's caller does not); see LowerFormalArguments.
 template <typename ArgT>
 static void analyzeRXArguments(CCState &State,
-                               const SmallVectorImpl<ArgT> &Args) {
+                               const SmallVectorImpl<ArgT> &Args, bool GNUABI) {
   static const MCPhysReg ArgRegs[] = {RX::R1, RX::R2, RX::R3, RX::R4};
   const unsigned MaxRegBytes = 16;
 
@@ -827,7 +834,8 @@ static void analyzeRXArguments(CCState &State,
           State.AllocateStack(Size, Flags.getNonZeroByValAlign());
       State.addLoc(CCValAssign::getMem(I, Args[I].VT, Offset, Args[I].VT,
                                        CCValAssign::Full));
-      Bytes += alignTo(Size, 4);
+      if (GNUABI)
+        Bytes += alignTo(Size, 4);
       I = J;
       continue;
     }
@@ -846,7 +854,8 @@ static void analyzeRXArguments(CCState &State,
 
     bool Named = isNamedArg(Args[I]) &&
                  static_cast<int>(Args[I].OrigArgIndex) != LastNamed;
-    if (Named && Bytes + Size <= MaxRegBytes) {
+    bool InRegs = Named && Bytes + Size <= MaxRegBytes;
+    if (InRegs) {
       unsigned Reg = Bytes / 4;
       for (unsigned K = I; K != J; ++K) {
         State.addLoc(CCValAssign::getReg(K, Args[K].VT, ArgRegs[Reg++],
@@ -868,7 +877,9 @@ static void analyzeRXArguments(CCState &State,
         Offset += alignTo(Args[K].VT.getStoreSize(), 4);
       }
     }
-    Bytes += Size;
+    // CC-RX counts only the arguments placed in registers; GNURX all.
+    if (InRegs || GNUABI)
+      Bytes += Size;
     I = J;
   }
 }
@@ -886,7 +897,7 @@ SDValue RXTargetLowering::LowerFormalArguments(
 
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
-  analyzeRXArguments(CCInfo, Ins);
+  analyzeRXArguments(CCInfo, Ins, STI.isGNUABI());
 
   for (const CCValAssign &VA : ArgLocs) {
     const ISD::ArgFlagsTy &Flags = Ins[VA.getValNo()].Flags;
@@ -895,6 +906,14 @@ SDValue RXTargetLowering::LowerFormalArguments(
       Register VReg = RegInfo.createVirtualRegister(&RX::GPRRegClass);
       RegInfo.addLiveIn(VA.getLocReg(), VReg);
       ArgValue = DAG.getCopyFromReg(Chain, DL, VReg, VA.getLocVT());
+      // A char or short that the caller extended (signext / zeroext) is
+      // extended again: a GNURX caller leaves the upper bits undefined.
+      EVT OrigVT = Ins[VA.getValNo()].ArgVT;
+      if (OrigVT.getSizeInBits() < 32 && Flags.isSExt())
+        ArgValue = DAG.getNode(ISD::SIGN_EXTEND_INREG, DL, MVT::i32, ArgValue,
+                               DAG.getValueType(OrigVT));
+      else if (OrigVT.getSizeInBits() < 32 && Flags.isZExt())
+        ArgValue = DAG.getZeroExtendInReg(ArgValue, DL, OrigVT);
       // GCC returns the sret pointer in R1; keep it for LowerReturn.
       if (Flags.isSRet())
         MF.getInfo<RXMachineFunctionInfo>()->setSRetReturnReg(VReg);
@@ -986,7 +1005,7 @@ SDValue RXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, CLI.IsVarArg, MF, ArgLocs, *DAG.getContext());
-  analyzeRXArguments(CCInfo, CLI.Outs);
+  analyzeRXArguments(CCInfo, CLI.Outs, STI.isGNUABI());
   unsigned NumBytes = CCInfo.getStackSize();
 
   Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);

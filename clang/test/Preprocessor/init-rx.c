@@ -1,31 +1,48 @@
 // RUN: %clang_cc1 -E -dM -triple rx-none-elf /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64
 // RUN: %clang -E -dM --target=rx-none-elf -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,RX600,ISA1,FPU,UCHAR
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX600,ISA1,FPU,UCHAR
 // RUN: %clang -E -dM --target=rx-none-elf -m64bit-doubles -mcpu=rx610 \
-// RUN:   -x c /dev/null | FileCheck %s --check-prefixes=CHECK,D64,RX610,ISA1,FPU
+// RUN:   -x c /dev/null | FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX610,ISA1,FPU
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rx200 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,RX200,ISA1
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX200,ISA1
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rx100 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,RX100,ISA1
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX100,ISA1
 // RUN: %clang -E -dM --target=rx-none-elf -mnofpu -m32bit-doubles \
-// RUN:   -x c /dev/null | FileCheck %s --check-prefixes=CHECK,D32,RX600,ISA1
+// RUN:   -x c /dev/null | FileCheck %s --check-prefixes=CHECK,CCRX,D32,RX600,ISA1
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rxv1 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,ISA1
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA1
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rxv2 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,ISA2,FPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA2,FPU
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rxv3 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,ISA3,FPU,DFPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA3,FPU,DFPU
 // RUN: %clang -E -dM --target=rx-none-elf -misa=v3 -mdfpu -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,ISA3,FPU,DFPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA3,FPU,DFPU
 // RUN: %clang -E -dM --target=rx-none-elf -misa=v1 -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,ISA1,FPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA1,FPU
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rx64m -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,RX64M,ISA2,FPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX64M,ISA2,FPU
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rx66t -x c /dev/null | \
-// RUN:   FileCheck %s --check-prefixes=CHECK,D64,RX66T,ISA3,FPU
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX66T,ISA3,FPU
 // RUN: %clang -E -dM --target=rx-none-elf -mcpu=rxv3e -mno-dfpu -x c \
-// RUN:   /dev/null | FileCheck %s --check-prefixes=CHECK,D64,ISA3,FPU
+// RUN:   /dev/null | FileCheck %s --check-prefixes=CHECK,CCRX,D64,ISA3,FPU
+// RUN: %clang -E -dM --target=rx-none-elf -mabi=ccrx -x c /dev/null | \
+// RUN:   FileCheck %s --check-prefixes=CHECK,CCRX,D64,RX600,ISA1,FPU,UCHAR
+// RUN: %clang -E -dM --target=rx-none-elf -mabi=gnu -x c /dev/null | \
+// RUN:   FileCheck %s --check-prefixes=CHECK,GNU,D64,RX600,ISA1,FPU,UCHAR
+// RUN: not %clang -E --target=rx-none-elf -mabi=foo -x c /dev/null 2>&1 | \
+// RUN:   FileCheck %s --check-prefix=BAD
+// BAD: error: unsupported argument 'foo' to option '-mabi='
+// Each ABI defines only its own macro, and neither GCC's __RX_GCC_ABI__ (its
+// -mgcc-abi, whose stacked arguments are not naturally aligned).
+// RUN: %clang -E -dM --target=rx-none-elf -x c /dev/null | \
+// RUN:   FileCheck %s --check-prefix=NOT-CCRX
+// RUN: %clang -E -dM --target=rx-none-elf -mabi=gnu -x c /dev/null | \
+// RUN:   FileCheck %s --check-prefix=NOT-GNU
+// NOT-CCRX-NOT: __RX_GNU_ABI__
+// NOT-CCRX-NOT: __RX_GCC_ABI__
+// NOT-GNU-NOT: __RX_CCRX_ABI__
+// NOT-GNU-NOT: __RX_GCC_ABI__
 
 // The types and macros of rx-elf-gcc 14.2 (TARGET_CPU_CPP_BUILTINS in
 // gcc/config/rx/rx.h), by default with -m64bit-doubles, the ABI of the RX
@@ -38,18 +55,22 @@
 // CHECK-DAG: #define __RX_LITTLE_ENDIAN__ 1
 // CHECK-DAG: #define __RX_GAS_SYNTAX__ 1
 // CHECK-DAG: #define __RX_ABI__ 1
+// CCRX-DAG: #define __RX_CCRX_ABI__ 1
+// GNU-DAG: #define __RX_GNU_ABI__ 1
 // CHECK-DAG: #define __RX_ALLOW_STRING_INSNS__ 1
 // CHECK-DAG: #define __USER_LABEL_PREFIX__ _
 // CHECK-DAG: #define __SIZEOF_POINTER__ 4
 // CHECK-DAG: #define __SIZEOF_INT__ 4
 // CHECK-DAG: #define __SIZEOF_LONG__ 4
 // CHECK-DAG: #define __SIZEOF_LONG_LONG__ 8
-// CHECK-DAG: #define __SIZEOF_WCHAR_T__ 4
+// CCRX-DAG: #define __SIZEOF_WCHAR_T__ 2
+// GNU-DAG: #define __SIZEOF_WCHAR_T__ 4
 // CHECK-DAG: #define __BIGGEST_ALIGNMENT__ 4
 // CHECK-DAG: #define __SIZE_TYPE__ long unsigned int
 // CHECK-DAG: #define __PTRDIFF_TYPE__ long int
 // CHECK-DAG: #define __INTPTR_TYPE__ long int
-// CHECK-DAG: #define __WCHAR_TYPE__ long int
+// CCRX-DAG: #define __WCHAR_TYPE__ unsigned short
+// GNU-DAG: #define __WCHAR_TYPE__ long int
 // CHECK-DAG: #define __WINT_TYPE__ unsigned int
 // CHECK-DAG: #define __CHAR16_TYPE__ unsigned short
 // CHECK-DAG: #define __CHAR32_TYPE__ long unsigned int

@@ -26,15 +26,15 @@ define double @l_cross(i64 %x, double %y) {
 ; CHECK-NEXT:    mov.l r8, r1
 ; CHECK-NEXT:    mov.l r7, r2
 ; CHECK-NEXT:    bsr.a ___truncdfsf2
-; CHECK-NEXT:    shll #1, r6, r2
-; CHECK-NEXT:    mov.l r2, 12[r0]
+; CHECK-NEXT:    mov.l r1, r4
+; CHECK-NEXT:    shll #1, r6, r1
 ; CHECK-NEXT:    mov.l r1, 8[r0]
 ; CHECK-NEXT:    mov.l r7, 4[r0]
 ; CHECK-NEXT:    mov.l r8, [r0]
 ; CHECK-NEXT:    shlr #31, r6, r1
 ; CHECK-NEXT:    shll #1, r9, r2
 ; CHECK-NEXT:    or r2, r1
-; CHECK-NEXT:    mov.l r1, 16[r0]
+; CHECK-NEXT:    mov.l r1, 12[r0]
 ; CHECK-NEXT:    mov.l #3, r1
 ; CHECK-NEXT:    mov.l r6, r2
 ; CHECK-NEXT:    mov.l r9, r3
