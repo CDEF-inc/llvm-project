@@ -644,6 +644,24 @@ static uint64_t getRISCVUndefinedRelativeWeakVA(uint64_t type, uint64_t p) {
   }
 }
 
+// On RX a branch to an undefined weak symbol branches to itself (as on
+// RISC-V): address 0 can be out of the branch's reach (code at 0x01000000
+// is 16 MB away from it, more than bsr.a's 8 MB), and such calls are only
+// made after a check that the symbol is there (crtbegin.o's
+// __register_frame_info). P is the field's address, one byte into the
+// instruction. bra.s's 3-bit field is in the opcode byte and cannot hold 0,
+// so it keeps the symbol's address (0).
+static uint64_t getRXUndefinedRelativeWeakVA(uint64_t type, uint64_t p) {
+  switch (type) {
+  case R_RX_DIR8S_PCREL:
+  case R_RX_DIR16S_PCREL:
+  case R_RX_DIR24S_PCREL:
+    return p - 1;
+  default:
+    return 0;
+  }
+}
+
 // ARM SBREL relocations are of the form S + A - B where B is the static base
 // The ARM ABI defines base to be "addressing origin of the output segment
 // defining the symbol S". We defined the "addressing origin"/static base to be
@@ -942,6 +960,8 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
         dest = p;
       else if (ctx.arg.emachine == EM_RISCV)
         dest = getRISCVUndefinedRelativeWeakVA(r.type, p) + a;
+      else if (ctx.arg.emachine == EM_RX)
+        dest = getRXUndefinedRelativeWeakVA(r.type, p);
       else
         dest = r.sym->getVA(ctx, a);
     } else {
