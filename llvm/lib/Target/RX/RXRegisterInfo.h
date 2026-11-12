@@ -31,6 +31,15 @@ public:
   const TargetRegisterClass *
   getPointerRegClass(unsigned Kind = 0) const override;
 
+  // A stack access beyond dsp:16 goes through a scratch register
+  // (eliminateFrameIndex), which PEI's scavenger allocates.
+  bool requiresRegisterScavenging(const MachineFunction &MF) const override {
+    return true;
+  }
+  bool requiresFrameIndexScavenging(const MachineFunction &MF) const override {
+    return true;
+  }
+
   bool eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;

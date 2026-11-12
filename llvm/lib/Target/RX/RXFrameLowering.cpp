@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -280,6 +281,19 @@ void RXFrameLowering::emitEpilogue(MachineFunction &MF,
     CFIBuilder.buildDefCFAOffset(4);
     for (const CalleeSavedInfo &I : MFI.getCalleeSavedInfo())
       CFIBuilder.buildRestore(I.getReg());
+  }
+}
+
+// A frame with offsets beyond dsp:16 for byte accesses (64 KB) may need a
+// scratch register for an access (RXRegisterInfo::eliminateFrameIndex):
+// give the scavenger a slot to spill one to when none is free. PEI puts
+// it next to SP, in reach of any access.
+void RXFrameLowering::processFunctionBeforeFrameFinalized(
+    MachineFunction &MF, RegScavenger *RS) const {
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  if (RS && MFI.estimateStackSize(MF) > 0xffff) {
+    int FI = MFI.CreateSpillStackObject(4, Align(4));
+    RS->addScavengingFrameIndex(FI);
   }
 }
 

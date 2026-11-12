@@ -35,6 +35,17 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
 
+  // A compare gives an i32. RX has no vector registers, but the DAG
+  // combiner and the type legalizer still ask for the type of a vector
+  // compare before splitting it into scalars (the default asserts on a
+  // vector): a vector of integers of the operands' width.
+  EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                         EVT VT) const override {
+    if (!VT.isVector())
+      return MVT::i32;
+    return VT.changeVectorElementTypeToInteger();
+  }
+
   // A float constant is a mov.l of its bit pattern.
   bool isFPImmLegal(const APFloat &Imm, EVT VT,
                     bool ForCodeSize) const override {

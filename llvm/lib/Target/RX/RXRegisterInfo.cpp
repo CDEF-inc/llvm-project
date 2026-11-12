@@ -98,6 +98,25 @@ static unsigned getAccessScale(unsigned Opc) {
   }
 }
 
+// Whether an instruction at MI's place may read the flags (PSW) that an
+// earlier one set: a later instruction reads them before setting them, or
+// they are live into a successor.
+static bool isPSWLiveAt(const MachineInstr &MI) {
+  const MachineBasicBlock &MBB = *MI.getParent();
+  for (MachineBasicBlock::const_iterator I = std::next(MI.getIterator()),
+                                         E = MBB.end();
+       I != E; ++I) {
+    if (I->readsRegister(RX::PSW, /*TRI=*/nullptr))
+      return true;
+    if (I->definesRegister(RX::PSW, /*TRI=*/nullptr))
+      return false;
+  }
+  for (const MachineBasicBlock *Succ : MBB.successors())
+    if (Succ->isLiveIn(RX::PSW))
+      return true;
+  return false;
+}
+
 bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                          int SPAdj, unsigned FIOperandNum,
                                          RegScavenger *RS) const {
@@ -124,8 +143,25 @@ bool RXRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     return false;
   }
 
-  if (!isEncodableDisp(Offset, getAccessScale(MI.getOpcode())))
-    report_fatal_error("RX: stack offset not encodable in a dsp:16 access");
+  if (!isEncodableDisp(Offset, getAccessScale(MI.getOpcode()))) {
+    // Beyond dsp:16 (64 K accesses up from the base), or not a multiple of
+    // the access size: add #Offset, base, tmp, and the access at [tmp]
+    // (PEI's scavenger picks tmp; RXFrameLowering keeps it a slot to
+    // spill to in a large frame). add sets the flags, which must not be
+    // live here.
+    if (isPSWLiveAt(MI))
+      report_fatal_error("RX: stack offset not encodable in a dsp:16 access "
+                         "while the flags are live");
+    MachineBasicBlock &MBB = *MI.getParent();
+    const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+    Register Tmp = MF.getRegInfo().createVirtualRegister(&RX::GPRRegClass);
+    BuildMI(MBB, II, MI.getDebugLoc(), TII.get(RX::ADD_rri32), Tmp)
+        .addReg(Base)
+        .addImm(Offset);
+    MI.getOperand(FIOperandNum).ChangeToRegister(Tmp, false, false, true);
+    MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
+    return false;
+  }
 
   MI.getOperand(FIOperandNum).ChangeToRegister(Base, false);
   MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
